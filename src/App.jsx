@@ -40,6 +40,9 @@ const CATEGORIES = [
   "Serramenti e falegnameria",
   "Fondo rischi",
   "Spesa struttura",
+  "IMU",
+  "Commissione Agenzia",
+  "Oneri Comunali",
   "Altro",
 ];
 
@@ -48,7 +51,7 @@ const seedProjects = () => [
     id: uid(),
     name: "Residenza Valzella",
     location: "Ardesio",
-    taxRate: 24,
+    taxRate: 28,
     capital: { total: 502245, equityShare: 100, rate: 5, months: 18 },
     durationMonths: 18,
     costs: [
