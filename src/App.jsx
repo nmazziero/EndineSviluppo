@@ -802,7 +802,8 @@ export default function Dashboard() {
               durationMonths: 12,
               costs: [],
               units: [],
-              notes: ""
+              notes: "",
+              appunti: "",
             };
             updateProjects((prev) => [...prev, np]);
             setActiveId(np.id);
@@ -824,6 +825,7 @@ export default function Dashboard() {
             <CostsSection project={active} onChange={updateActive} metrics={metrics} />
             <UnitsSection project={active} onChange={updateActive} metrics={metrics} />
             <NotesSection project={active} onChange={updateActive} />
+            <AppuntiSection project={active} onChange={updateActive} />
           </>
         )}
 
@@ -1405,6 +1407,21 @@ function NotesSection({ project, onChange }) {
         value={project.notes || ""}
         placeholder="Annotazioni libere su questo progetto: accordi presi, promemoria, contatti, scadenze…"
         onChange={(e) => onChange((p) => ({ ...p, notes: e.target.value }))}
+        rows={6}
+      />
+    </section>
+  );
+}
+
+function AppuntiSection({ project, onChange }) {
+  return (
+    <section style={styles.section} className="section-card">
+      <div style={styles.eyebrowSmall}>Appunti</div>
+      <textarea
+        style={styles.notesTextarea}
+        value={project.appunti || ""}
+        placeholder="Appunti personali, non inclusi nel PDF scaricato…"
+        onChange={(e) => onChange((p) => ({ ...p, appunti: e.target.value }))}
         rows={6}
       />
     </section>
