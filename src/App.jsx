@@ -772,11 +772,12 @@ export default function Dashboard() {
               id: uid(),
               name: "Nuovo progetto",
               location: "",
-              taxRate: 24,
+              taxRate: 28,
               capital: { total: 0, equityShare: 100, rate: 5, months: 12 },
               durationMonths: 12,
               costs: [],
               units: [],
+              notes: ""
             };
             updateProjects((prev) => [...prev, np]);
             setActiveId(np.id);
@@ -797,6 +798,7 @@ export default function Dashboard() {
             <CapitalSection project={active} onChange={updateActive} metrics={metrics} />
             <CostsSection project={active} onChange={updateActive} metrics={metrics} />
             <UnitsSection project={active} onChange={updateActive} metrics={metrics} />
+            <NotesSection project={active} onChange={updateActive} />
           </>
         )}
 
@@ -1369,6 +1371,21 @@ function UnitsSection({ project, onChange, metrics }) {
   );
 }
 
+function NotesSection({ project, onChange }) {
+  return (
+    <section style={styles.section} className="section-card">
+      <div style={styles.eyebrowSmall}>Note</div>
+      <textarea
+        style={styles.notesTextarea}
+        value={project.notes || ""}
+        placeholder="Annotazioni libere su questo progetto: accordi presi, promemoria, contatti, scadenze…"
+        onChange={(e) => onChange((p) => ({ ...p, notes: e.target.value }))}
+        rows={6}
+      />
+    </section>
+  );
+}
+
 // ---------- styles ----------
 const bg = "#0A0E16";
 const surface = "#131A26";
@@ -1710,4 +1727,17 @@ const styles = {
   durationValue: { fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 600, color: ink },
   durationSlider: { width: "100%", accentColor: teal, cursor: "pointer" },
   durationHint: { fontSize: 11.5, color: inkFaint, marginTop: 6 },
+  notesTextarea: {
+    width: "100%",
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 13.5,
+    lineHeight: 1.6,
+    padding: "12px 14px",
+    borderRadius: 10,
+    border: `1px solid ${border}`,
+    background: surfaceAlt,
+    color: ink,
+    resize: "vertical",
+    minHeight: 100,
+  },
 };
