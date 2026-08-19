@@ -286,12 +286,22 @@ function buildReportHtml(project, metrics) {
     <div style="display:flex;gap:24px;margin-top:14px;padding-top:12px;border-top:1px solid ${borderC};font-family:'JetBrains Mono',monospace;font-size:12.5px;color:${inkSoftC};">
       <span>Unità totali: <strong style="color:${inkC};">${project.units.length}</strong></span>
       <span>Mq totali: <strong style="color:${inkC};">${metrics.totalSqm}</strong></span>
-      <span>Prezzo medio/mq: <strong style="color:${inkC};">${eur(metrics.avgPricePerSqm)}</strong></span>
+           <span>Prezzo medio/mq: <strong style="color:${inkC};">${eur(metrics.avgPricePerSqm)}</strong></span>
     </div>
   </div>
+
+  ${
+    project.notes && project.notes.trim()
+      ? `<div class="section">
+    <div class="eyebrow">Note</div>
+    <div style="font-size:13px;color:${inkC};line-height:1.7;white-space:pre-wrap;">${project.notes.trim()}</div>
+  </div>`
+      : ""
+  }
 </body>
 </html>`;
 }
+
 
 function hexRgb(hex) {
   const h = hex.replace("#", "");
@@ -584,6 +594,21 @@ function generatePdfReport(doc, project, metrics) {
     marginX,
     y
   );
+  y += 32;
+
+  if (project.notes && project.notes.trim()) {
+    startSection(90);
+    sectionTitle("Note");
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(...darkC);
+    const noteLines = doc.splitTextToSize(project.notes.trim(), contentWidth);
+    noteLines.forEach((line) => {
+      ensureSpace(15);
+      doc.text(line, marginX, y);
+      y += 15;
+    });
+  }
 }
 
 // ---------- storage ----------
