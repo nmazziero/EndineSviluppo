@@ -1244,6 +1244,31 @@ function CostsSection({ project, onChange, metrics }) {
       costs: [...p.costs, { id: uid(), category: CATEGORIES[0], desc: "", amount: 0 }],
     }));
   };
+    // --- trascinamento per cambiare ordine ---
+  const [armedId, setArmedId] = useState(null);
+  const [dragId, setDragId] = useState(null);
+  const [overId, setOverId] = useState(null);
+
+  const moveRow = (fromId, toId) => {
+    if (!fromId || !toId || fromId === toId) return;
+    onChange((p) => {
+      const list = [...p.costs];
+      const from = list.findIndex((c) => c.id === fromId);
+      const to = list.findIndex((c) => c.id === toId);
+      if (from < 0 || to < 0) return p;
+      const [moved] = list.splice(from, 1);
+      list.splice(to, 0, moved);
+      return { ...p, costs: list };
+    });
+  };
+
+  const endDrag = () => {
+    setArmedId(null);
+    setDragId(null);
+    setOverId(null);
+  };
+
+  const COST_COLS = "20px 1.1fr 1.4fr 1.9fr 32px";
 
   return (
     <section style={styles.section} className="section-card">
@@ -1253,16 +1278,55 @@ function CostsSection({ project, onChange, metrics }) {
       </div>
 
       <div style={styles.tableWrap}>
-        <div style={{ ...styles.tableHeaderRow, gridTemplateColumns: "1.1fr 1.4fr 1.9fr 32px" }}>
+        <div style={{ ...styles.tableHeaderRow, gridTemplateColumns: COST_COLS }}>
+          <div />
           <div>Categoria</div>
           <div>Descrizione</div>
           <div>Importo</div>
           <div />
         </div>
-        {project.costs.map((c) => {
+                {project.costs.map((c) => {
           const { max, step } = sliderRange(c.amount);
+          const isDragging = dragId === c.id;
+          const isOver = overId === c.id && dragId && dragId !== c.id;
           return (
-            <div key={c.id} style={{ ...styles.tableRow, gridTemplateColumns: "1.1fr 1.4fr 1.9fr 32px" }}>
+            <div
+              key={c.id}
+              draggable={armedId === c.id}
+              onDragStart={(e) => {
+                setDragId(c.id);
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", c.id);
+              }}
+              onDragOver={(e) => {
+                if (!dragId) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                if (overId !== c.id) setOverId(c.id);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                moveRow(dragId, c.id);
+                endDrag();
+              }}
+              onDragEnd={endDrag}
+              style={{
+                ...styles.tableRow,
+                gridTemplateColumns: COST_COLS,
+                opacity: isDragging ? 0.4 : 1,
+                borderTop: isOver ? `2px solid ${teal}` : "2px solid transparent",
+                transition: "opacity 0.15s ease",
+              }}
+            >
+              <div
+                className="no-print"
+                style={styles.dragHandle}
+                title="Trascina per cambiare l'ordine"
+                onMouseDown={() => setArmedId(c.id)}
+                onMouseUp={() => setArmedId(null)}
+              >
+                ⋮⋮
+              </div>
               <select
                 style={styles.select}
                 value={c.category}
@@ -1769,6 +1833,15 @@ const styles = {
   durationValue: { fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 600, color: ink },
   durationSlider: { width: "100%", accentColor: teal, cursor: "pointer" },
   durationHint: { fontSize: 11.5, color: inkFaint, marginTop: 6 },
+    dragHandle: {
+    cursor: "grab",
+    color: inkFaint,
+    fontSize: 15,
+    lineHeight: 1,
+    letterSpacing: -2,
+    userSelect: "none",
+    textAlign: "center",
+  },
   notesTextarea: {
     width: "100%",
     fontFamily: "'Inter', sans-serif",
