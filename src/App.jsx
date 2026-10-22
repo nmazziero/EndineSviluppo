@@ -94,7 +94,9 @@ const seedProjects = () => [
 // ---------- computation ----------
 function computeProject(p) {
   const totalCosts = p.costs.reduce((s, c) => s + (Number(c.amount) || 0), 0);
-  const totalRevenue = p.units.reduce((s, u) => s + (Number(u.price) || 0), 0);
+    const unitsRevenue = p.units.reduce((s, u) => s + (Number(u.price) || 0), 0);
+  const extraRevenue = (p.extraRevenues || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const totalRevenue = unitsRevenue + extraRevenue;
   const totalSqm = p.units.reduce((s, u) => s + (Number(u.sqm) || 0), 0);
   const totalCapital = Number(p.capital.total) || 0;
   const equityShare = Number.isFinite(Number(p.capital.equityShare)) ? Number(p.capital.equityShare) : 100;
@@ -112,7 +114,7 @@ function computeProject(p) {
   const durationMonths = Number(p.durationMonths) || 0;
   const roiGrossAnnualized = durationMonths > 0 ? roiGross * (12 / durationMonths) : 0;
   const roiNetAnnualized = durationMonths > 0 ? roiNet * (12 / durationMonths) : 0;
-  const avgPricePerSqm = totalSqm > 0 ? totalRevenue / totalSqm : 0;
+  const avgPricePerSqm = totalSqm > 0 ? unitsRevenue / totalSqm : 0;
 
   const effectiveLabel = (c) => (c.category === "Altro" ? (c.desc?.trim() || "Altro") : c.category);
   const labelTotals = new Map();
@@ -127,6 +129,8 @@ function computeProject(p) {
   return {
     totalCosts,
     totalRevenue,
+    unitsRevenue,
+    extraRevenue,
     totalSqm,
     equity,
     financed,
@@ -595,6 +599,41 @@ function generatePdfReport(doc, project, metrics) {
     y
   );
   y += 32;
+  const extraRows = (project.extraRevenues || []).filter((r) => (r.label && r.label.trim()) || Number(r.amount));
+  if (extraRows.length > 0) {
+    startSection(110);
+    sectionTitle("Altri ricavi");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.5);
+    doc.setTextColor(...grayC);
+    doc.text("VOCE", marginX, y);
+    doc.text("IMPORTO", pageWidth - marginX, y, { align: "right" });
+    y += 8;
+    doc.setDrawColor(...lightGrayC);
+    doc.line(marginX, y, pageWidth - marginX, y);
+    y += 14;
+    extraRows.forEach((r) => {
+      ensureSpace(16);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9.5);
+      doc.setTextColor(...darkC);
+      doc.text((r.label && r.label.trim()) || "—", marginX, y);
+      doc.text(eur(Number(r.amount) || 0), pageWidth - marginX, y, { align: "right" });
+      y += 16;
+    });
+    y += 6;
+    ensureSpace(24);
+    doc.setDrawColor(...lightGrayC);
+    doc.line(marginX, y, pageWidth - marginX, y);
+    y += 16;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(...darkC);
+    doc.text("Totale altri ricavi", marginX, y);
+    doc.setTextColor(...tealC);
+    doc.text(eur(metrics.extraRevenue), pageWidth - marginX, y, { align: "right" });
+    y += 32;
+  }
 
   if (project.notes && project.notes.trim()) {
     startSection(90);
@@ -802,6 +841,7 @@ export default function Dashboard() {
               durationMonths: 12,
               costs: [],
               units: [],
+              extraRevenues: [],
               notes: "",
               appunti: "",
             };
@@ -824,6 +864,7 @@ export default function Dashboard() {
             <CapitalSection project={active} onChange={updateActive} metrics={metrics} />
             <CostsSection project={active} onChange={updateActive} metrics={metrics} />
             <UnitsSection project={active} onChange={updateActive} metrics={metrics} />
+            <ExtraRevenueSection project={active} onChange={updateActive} metrics={metrics} />
             <NotesSection project={active} onChange={updateActive} />
             <AppuntiSection project={active} onChange={updateActive} />
           </>
@@ -1457,6 +1498,71 @@ function UnitsSection({ project, onChange, metrics }) {
           <span style={styles.chipLabel}>Prezzo medio / mq</span>
           <span style={styles.chipValue}>{eur(metrics.avgPricePerSqm)}</span>
         </div>
+      </div>
+    </section>
+  );
+}
+function ExtraRevenueSection({ project, onChange, metrics }) {
+  const rows = project.extraRevenues || [];
+  const updateRow = (id, field, value) => {
+    onChange((p) => ({
+      ...p,
+      extraRevenues: (p.extraRevenues || []).map((r) => (r.id === id ? { ...r, [field]: value } : r)),
+    }));
+  };
+  const removeRow = (id) => {
+    onChange((p) => ({ ...p, extraRevenues: (p.extraRevenues || []).filter((r) => r.id !== id) }));
+  };
+  const addRow = () => {
+    onChange((p) => ({
+      ...p,
+      extraRevenues: [...(p.extraRevenues || []), { id: uid(), label: "", amount: 0 }],
+    }));
+  };
+
+  return (
+    <section style={styles.section} className="section-card">
+      <div style={styles.sectionHeadRow}>
+        <div style={styles.eyebrowSmall}>Altri ricavi</div>
+        <button style={styles.addRowBtn} className="no-print" onClick={addRow}>+ Voce di ricavo</button>
+      </div>
+
+      <datalist id="extra-revenue-suggestions">
+        <option value="Migliorie" />
+        <option value="Allacciamenti" />
+      </datalist>
+
+      <div style={styles.tableWrap}>
+        <div style={{ ...styles.tableHeaderRow, gridTemplateColumns: "2fr 1fr 40px" }}>
+          <div>Voce</div>
+          <div style={{ textAlign: "right" }}>Importo</div>
+          <div />
+        </div>
+        {rows.map((r) => (
+          <div key={r.id} style={{ ...styles.tableRow, gridTemplateColumns: "2fr 1fr 40px" }}>
+            <input
+              style={styles.input}
+              list="extra-revenue-suggestions"
+              value={r.label}
+              placeholder="es. Migliorie, Allacciamenti"
+              onChange={(e) => updateRow(r.id, "label", e.target.value)}
+            />
+            <NumberField
+              style={{ ...styles.input, textAlign: "right" }}
+              value={r.amount}
+              onChange={(v) => updateRow(r.id, "amount", v)}
+            />
+            <button style={styles.rowDeleteBtn} className="no-print" onClick={() => removeRow(r.id)} aria-label="Elimina riga">×</button>
+          </div>
+        ))}
+        {rows.length === 0 && (
+          <div style={styles.tableEmpty}>Nessun altro ricavo. Aggiungine uno sopra.</div>
+        )}
+      </div>
+
+      <div style={styles.totalLine}>
+        <span>Totale altri ricavi (inclusi nei ricavi totali)</span>
+        <span style={styles.totalLineValue}>{eur(metrics.extraRevenue)}</span>
       </div>
     </section>
   );
