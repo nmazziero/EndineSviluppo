@@ -40,6 +40,7 @@ const CATEGORIES = [
   "Corrimani Balconi",
   "Serramenti e falegnameria",
   "Affitto Attrezzature",
+  "General Contractor",
   "Fondo rischi",
   "Spesa struttura",
   "IMU",
