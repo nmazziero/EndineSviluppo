@@ -139,16 +139,19 @@ function computeProject(p) {
     .filter((c) => c.amount > 0);
   
   // Torta: categorie sopra la soglia (max 8), tutte le altre sommate in "Altri costi"
-  const pieSorted = [...byCategory].sort((a, b) => b.amount - a.amount);
+   const includeAcquisto = p.pieIncludeAcquisto !== false;
+  const pieBase = includeAcquisto ? byCategory : byCategory.filter((c) => c.cat !== "Acquisto");
+  const pieTotal = pieBase.reduce((s, c) => s + c.amount, 0);
+  const pieSorted = [...pieBase].sort((a, b) => b.amount - a.amount);
   const pieMain = pieSorted
-    .filter((c) => totalCosts > 0 && (c.amount / totalCosts) * 100 > PIE_THRESHOLD)
+    .filter((c) => pieTotal > 0 && (c.amount / pieTotal) * 100 > PIE_THRESHOLD)
     .slice(0, 8);
   const pieMainSet = new Set(pieMain);
   const pieOthers = pieSorted.filter((c) => !pieMainSet.has(c)).reduce((s, c) => s + c.amount, 0);
   const costPie = [
-    ...pieMain.map((c, i) => ({ name: c.cat, value: c.amount, idx: i, share: (c.amount / totalCosts) * 100 })),
+    ...pieMain.map((c, i) => ({ name: c.cat, value: c.amount, idx: i, share: (c.amount / pieTotal) * 100 })),
     ...(pieOthers > 0
-      ? [{ name: "Altri costi", value: pieOthers, idx: -1, share: (pieOthers / totalCosts) * 100 }]
+      ? [{ name: "Altri costi", value: pieOthers, idx: -1, share: (pieOthers / pieTotal) * 100 }]
       : []),
   ];
 
@@ -647,7 +650,11 @@ function generatePdfReport(doc, project, metrics) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8.5);
     doc.setTextColor(...grayC);
-    doc.text(`Le categorie sotto il ${PIE_THRESHOLD}% del costo totale sono sommate in "Altri costi".`, marginX, y);
+        doc.text(
+      `${project.pieIncludeAcquisto === false ? "Acquisto escluso dal grafico. " : ""}Le categorie sotto il ${PIE_THRESHOLD}% sono sommate in "Altri costi".`,
+      marginX,
+      y
+    );
     y += 32;
   }
 
@@ -957,7 +964,7 @@ export default function Dashboard() {
             <Ledger metrics={metrics} project={active} onChange={updateActive} />
             <CapitalSection project={active} onChange={updateActive} metrics={metrics} />
             <CostsSection project={active} onChange={updateActive} metrics={metrics} />
-            <CostPieSection metrics={metrics} />
+            <CostPieSection project={active} onChange={updateActive} metrics={metrics} />
             <UnitsSection project={active} onChange={updateActive} metrics={metrics} />
             <ExtraRevenueSection project={active} onChange={updateActive} metrics={metrics} />
             <NotesSection project={active} onChange={updateActive} />
@@ -1665,11 +1672,27 @@ function ExtraRevenueSection({ project, onChange, metrics }) {
     </section>
   );
 }
-function CostPieSection({ metrics }) {
+function CostPieSection({ project, onChange, metrics }) {
   const data = metrics.costPie;
+  const includeAcquisto = project.pieIncludeAcquisto !== false;
   return (
     <section style={styles.section} className="section-card">
-      <div style={styles.eyebrowSmall}>Incidenza dei costi per categoria</div>
+      <div style={styles.sectionHeadRow}>
+        <div style={styles.eyebrowSmall}>Incidenza dei costi per categoria</div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={includeAcquisto}
+          className="no-print"
+          style={styles.pieSwitchBtn}
+          onClick={() => onChange((p) => ({ ...p, pieIncludeAcquisto: p.pieIncludeAcquisto === false }))}
+        >
+          <span>Includi Acquisto</span>
+          <span style={{ ...styles.pieSwitchTrack, background: includeAcquisto ? teal : border }}>
+            <span style={{ ...styles.pieSwitchKnob, left: includeAcquisto ? 18 : 2 }} />
+          </span>
+        </button>
+      </div>
       {data.length === 0 ? (
         <div style={styles.tableEmpty}>Nessun costo da mostrare.</div>
       ) : (
@@ -1710,8 +1733,9 @@ function CostPieSection({ metrics }) {
           </div>
         </div>
       )}
-      <div style={styles.pieHint}>
-        Le categorie sotto il {PIE_THRESHOLD}% del costo totale sono sommate in "Altri costi".
+            <div style={styles.pieHint}>
+        {includeAcquisto ? "" : "Acquisto escluso: le percentuali sono calcolate sugli altri costi. "}
+        Le categorie sotto il {PIE_THRESHOLD}% sono sommate in "Altri costi".
       </div>
     </section>
   );
@@ -2111,6 +2135,37 @@ const styles = {
   pieLegendPct: { fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: ink, textAlign: "right", minWidth: 52 },
   pieLegendAmt: { fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: inkSoft, textAlign: "right", minWidth: 84 },
   pieHint: { fontSize: 11.5, color: inkFaint, marginTop: 14 },
+    pieSwitchBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: inkSoft,
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    padding: 0,
+    marginBottom: 16,
+  },
+  pieSwitchTrack: {
+    position: "relative",
+    display: "inline-block",
+    width: 36,
+    height: 20,
+    borderRadius: 10,
+    transition: "background 0.15s ease",
+  },
+  pieSwitchKnob: {
+    position: "absolute",
+    top: 2,
+    width: 16,
+    height: 16,
+    borderRadius: "50%",
+    background: "#fff",
+    transition: "left 0.15s ease",
+  },
     dragHandle: {
     cursor: "grab",
     color: inkFaint,
