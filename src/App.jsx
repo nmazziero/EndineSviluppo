@@ -29,6 +29,7 @@ const CATEGORIES = [
   "Pratiche comune",
   "Acqua",
   "Luce",
+  "Gas",
   "Fabbro",
   "Garage",
   "Tinteggiatura Interna",
@@ -38,11 +39,13 @@ const CATEGORIES = [
   "Posto auto",
   "Corrimani Balconi",
   "Serramenti e falegnameria",
+  "Affitto Attrezzature"
   "Fondo rischi",
   "Spesa struttura",
   "IMU",
   "Commissione Agenzia",
   "Oneri Comunali",
+  "Migliorie clienti",
   "Altro",
 ];
 
