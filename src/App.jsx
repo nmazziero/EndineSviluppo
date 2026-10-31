@@ -39,7 +39,7 @@ const CATEGORIES = [
   "Posto auto",
   "Corrimani Balconi",
   "Serramenti e falegnameria",
-  "Affitto Attrezzature"
+  "Affitto Attrezzature",
   "Fondo rischi",
   "Spesa struttura",
   "IMU",
