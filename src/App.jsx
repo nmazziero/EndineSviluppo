@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from "recharts";
 import jsPDF from "jspdf";
 import { kvGet, kvSet } from "./supabaseClient";
 
@@ -93,6 +93,14 @@ const seedProjects = () => [
     ],
   },
 ];
+// ---------- grafico a torta dei costi ----------
+const PIE_THRESHOLD = 3; // sotto questa % del totale la categoria finisce in "Altri costi"
+const PIE_COLORS_DARK = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
+const PIE_COLORS_LIGHT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"];
+const PIE_OTHERS_DARK = "#8A93A8";
+const PIE_OTHERS_LIGHT = "#9AA0AC";
+const pieColorDark = (d) => (d.idx < 0 ? PIE_OTHERS_DARK : PIE_COLORS_DARK[d.idx % PIE_COLORS_DARK.length]);
+const pieColorLight = (d) => (d.idx < 0 ? PIE_OTHERS_LIGHT : PIE_COLORS_LIGHT[d.idx % PIE_COLORS_LIGHT.length]);
 
 // ---------- computation ----------
 function computeProject(p) {
@@ -128,6 +136,20 @@ function computeProject(p) {
   const byCategory = Array.from(labelTotals.entries())
     .map(([cat, amount]) => ({ cat, amount }))
     .filter((c) => c.amount > 0);
+  
+  // Torta: categorie sopra la soglia (max 8), tutte le altre sommate in "Altri costi"
+  const pieSorted = [...byCategory].sort((a, b) => b.amount - a.amount);
+  const pieMain = pieSorted
+    .filter((c) => totalCosts > 0 && (c.amount / totalCosts) * 100 > PIE_THRESHOLD)
+    .slice(0, 8);
+  const pieMainSet = new Set(pieMain);
+  const pieOthers = pieSorted.filter((c) => !pieMainSet.has(c)).reduce((s, c) => s + c.amount, 0);
+  const costPie = [
+    ...pieMain.map((c, i) => ({ name: c.cat, value: c.amount, idx: i, share: (c.amount / totalCosts) * 100 })),
+    ...(pieOthers > 0
+      ? [{ name: "Altri costi", value: pieOthers, idx: -1, share: (pieOthers / totalCosts) * 100 }]
+      : []),
+  ];
 
   return {
     totalCosts,
@@ -150,6 +172,7 @@ function computeProject(p) {
     roiNetAnnualized,
     avgPricePerSqm,
     byCategory,
+    costPie,
   };
 }
 
@@ -309,6 +332,40 @@ function buildReportHtml(project, metrics) {
 </html>`;
 }
 
+// Disegna la torta su un canvas invisibile e restituisce un'immagine PNG per il PDF
+function pieToDataUrl(slices, colors, size) {
+  const scale = 3;
+  const canvas = document.createElement("canvas");
+  canvas.width = size * scale;
+  canvas.height = size * scale;
+  const ctx = canvas.getContext("2d");
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const r = canvas.width / 2 - 2 * scale;
+  const total = slices.reduce((s, d) => s + d.value, 0);
+  if (slices.length === 1) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = colors[0];
+    ctx.fill();
+  } else {
+    let a = -Math.PI / 2;
+    slices.forEach((d, i) => {
+      const ang = (d.value / total) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r, a, a + ang);
+      ctx.closePath();
+      ctx.fillStyle = colors[i];
+      ctx.fill();
+      ctx.lineWidth = 2 * scale;
+      ctx.strokeStyle = "#ffffff";
+      ctx.stroke();
+      a += ang;
+    });
+  }
+  return canvas.toDataURL("image/png");
+}
 
 function hexRgb(hex) {
   const h = hex.replace("#", "");
@@ -559,6 +616,39 @@ function generatePdfReport(doc, project, metrics) {
   doc.setTextColor(...tealC);
   doc.text(eur(metrics.totalCosts), pageWidth - marginX, y, { align: "right" });
   y += 32;
+
+    if (metrics.costPie.length > 0) {
+    const pie = metrics.costPie;
+    const pieSize = 150;
+    const rowH = 18;
+    const blockH = Math.max(pieSize, pie.length * rowH) + 16;
+    startSection(blockH + 50);
+    sectionTitle("Incidenza dei costi per categoria");
+    ensureSpace(blockH);
+    const colors = pie.map(pieColorLight);
+    doc.addImage(pieToDataUrl(pie, colors, 300), "PNG", marginX, y, pieSize, pieSize);
+    const legendX = marginX + pieSize + 30;
+    let ly = y + 12;
+    pie.forEach((d, i) => {
+      const [cr, cg, cb] = hexRgb(colors[i]);
+      doc.setFillColor(cr, cg, cb);
+      doc.rect(legendX, ly - 8, 9, 9, "F");
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9.5);
+      doc.setTextColor(...darkC);
+      doc.text(doc.splitTextToSize(d.name, 170)[0], legendX + 16, ly);
+      doc.text(pct(d.share), pageWidth - marginX - 80, ly, { align: "right" });
+      doc.setTextColor(...grayC);
+      doc.text(eur(d.value), pageWidth - marginX, ly, { align: "right" });
+      ly += rowH;
+    });
+    y += blockH;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(...grayC);
+    doc.text(`Le categorie sotto il ${PIE_THRESHOLD}% del costo totale sono sommate in "Altri costi".`, marginX, y);
+    y += 32;
+  }
 
   startSection(140);
   sectionTitle("Unità immobiliari");
@@ -866,6 +956,7 @@ export default function Dashboard() {
             <Ledger metrics={metrics} project={active} onChange={updateActive} />
             <CapitalSection project={active} onChange={updateActive} metrics={metrics} />
             <CostsSection project={active} onChange={updateActive} metrics={metrics} />
+            <CostPieSection metrics={metrics} />
             <UnitsSection project={active} onChange={updateActive} metrics={metrics} />
             <ExtraRevenueSection project={active} onChange={updateActive} metrics={metrics} />
             <NotesSection project={active} onChange={updateActive} />
@@ -1401,6 +1492,9 @@ function CostsSection({ project, onChange, metrics }) {
                   value={c.amount}
                   onChange={(v) => updateRow(c.id, "amount", v)}
                 />
+                                <span style={styles.costShare} title="Incidenza sul costo totale">
+                  {metrics.totalCosts > 0 ? pct(((Number(c.amount) || 0) / metrics.totalCosts) * 100) : "—"}
+                </span>
               </div>
               <button style={styles.rowDeleteBtn} className="no-print" onClick={() => removeRow(c.id)} aria-label="Elimina riga">×</button>
             </div>
@@ -1566,6 +1660,57 @@ function ExtraRevenueSection({ project, onChange, metrics }) {
       <div style={styles.totalLine}>
         <span>Totale altri ricavi (inclusi nei ricavi totali)</span>
         <span style={styles.totalLineValue}>{eur(metrics.extraRevenue)}</span>
+      </div>
+    </section>
+  );
+}
+function CostPieSection({ metrics }) {
+  const data = metrics.costPie;
+  return (
+    <section style={styles.section} className="section-card">
+      <div style={styles.eyebrowSmall}>Incidenza dei costi per categoria</div>
+      {data.length === 0 ? (
+        <div style={styles.tableEmpty}>Nessun costo da mostrare.</div>
+      ) : (
+        <div style={styles.pieWrap}>
+          <div style={styles.pieChartBox}>
+            <ResponsiveContainer width="100%" height={240}>
+              <PieChart>
+                <Pie
+                  data={data}
+                  dataKey="value"
+                  nameKey="name"
+                  outerRadius="90%"
+                  stroke={surface}
+                  strokeWidth={2}
+                  isAnimationActive={false}
+                >
+                  {data.map((d, i) => (
+                    <Cell key={i} fill={pieColorDark(d)} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={{ background: surfaceAlt, border: `1px solid ${border}`, borderRadius: 8, color: ink }}
+                  itemStyle={{ color: ink }}
+                  formatter={(v, name) => [eur(v), name]}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={styles.pieLegend}>
+            {data.map((d, i) => (
+              <div key={i} style={styles.pieLegendRow}>
+                <span style={{ ...styles.pieSwatch, background: pieColorDark(d) }} />
+                <span style={styles.pieLegendName}>{d.name}</span>
+                <span style={styles.pieLegendPct}>{pct(d.share)}</span>
+                <span style={styles.pieLegendAmt}>{eur(d.value)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={styles.pieHint}>
+        Le categorie sotto il {PIE_THRESHOLD}% del costo totale sono sommate in "Altri costi".
       </div>
     </section>
   );
@@ -1942,6 +2087,29 @@ const styles = {
   durationValue: { fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 600, color: ink },
   durationSlider: { width: "100%", accentColor: teal, cursor: "pointer" },
   durationHint: { fontSize: 11.5, color: inkFaint, marginTop: 6 },
+    costShare: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: inkFaint,
+    width: 46,
+    textAlign: "right",
+    flexShrink: 0,
+  },
+  pieWrap: { display: "flex", flexWrap: "wrap", gap: 24, alignItems: "center" },
+  pieChartBox: { flex: "1 1 260px", minWidth: 240 },
+  pieLegend: { flex: "1 1 320px", display: "flex", flexDirection: "column", gap: 10 },
+  pieLegendRow: {
+    display: "grid",
+    gridTemplateColumns: "14px 1fr auto auto",
+    gap: 12,
+    alignItems: "center",
+    fontSize: 13,
+  },
+  pieSwatch: { width: 12, height: 12, borderRadius: 3 },
+  pieLegendName: { color: ink },
+  pieLegendPct: { fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: ink, textAlign: "right", minWidth: 52 },
+  pieLegendAmt: { fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: inkSoft, textAlign: "right", minWidth: 84 },
+  pieHint: { fontSize: 11.5, color: inkFaint, marginTop: 14 },
     dragHandle: {
     cursor: "grab",
     color: inkFaint,
