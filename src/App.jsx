@@ -185,10 +185,10 @@ function computeProject(p) {
 
 // ---------- printable report ----------
 function buildReportHtml(project, metrics) {
-  const bgC = "#0A0E16";
-  const surfaceC = "#131A26";
-  const surfaceAltC = "#1B2433";
-  const borderC = "#242D3F";
+  const bgC = "#1B1E20";
+  const surfaceC = "#24282B";
+  const surfaceAltC = "#2D3236";
+  const borderC = "#3A4045";
   const inkC = "#EDF1F7";
   const inkSoftC = "#8A93A8";
   const inkFaintC = "#5C6478";
@@ -891,7 +891,7 @@ export default function Dashboard() {
   const metrics = active ? computeProject(active) : null;
   const ui = {
   styles, eur, pct, computeProject, NumberField,
-  colors: { teal, red, green, amber, ink, inkSoft, inkFaint, border, surfaceAlt },
+  colors: { teal, red, green, amber, ink, inkSoft, inkFaint, border, surface, surfaceAlt },
 };
 
   return (
@@ -1868,13 +1868,13 @@ function AppuntiSection({ project, onChange }) {
 }
 
 // ---------- styles ----------
-const bg = "#0A0E16";
-const surface = "#131A26";
-const surfaceAlt = "#1B2433";
-const border = "#242D3F";
-const ink = "#EDF1F7";
-const inkSoft = "#8A93A8";
-const inkFaint = "#5C6478";
+const bg = "#1B1E20";
+const surface = "#24282B";
+const surfaceAlt = "#2D3236";
+const border = "#3A4045";
+const ink = "#EDE8E1";
+const inkSoft = "#A9AFB0";
+const inkFaint = "#7F8688";
 const teal = "#D49A63"; // accento rame (dal logo)
 const tealDim = "#4A3320";
 const green = "#3ECF8E";
@@ -1885,7 +1885,7 @@ const styles = {
   page: {
     minHeight: "100vh",
     background: bg,
-    backgroundImage: "radial-gradient(circle at 15% 0%, #101826 0%, #0A0E16 55%)",
+    backgroundImage: "radial-gradient(circle at 15% 0%, #1F2325 0%, #1B1E20 55%)",
     color: ink,
     fontFamily: "'Inter', sans-serif",
     padding: "32px 20px 64px",
