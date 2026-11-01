@@ -296,9 +296,9 @@ export function ScoutingCard({ project, onChange, ui }) {
 // ---------- interruttore Progetti / Scouting ----------
 export function ViewSwitch({ view, setView, ui }) {
   const c = ui.colors;
-  const page = "#101825"; // colore dello sfondo della pagina nella zona delle linguette
-  const strip = c.surface || "#131A26"; // colore della fascia delle linguette
-  const hover = c.surfaceAlt || "#1B2433";
+  const page = c.page || "#1E2224"; // colore dello sfondo della pagina nella zona delle linguette
+  const strip = c.surface || "#24282B"; // colore della fascia delle linguette
+  const hover = c.surfaceAlt || "#2D3236";
   return (
     <>
       <style>{`
