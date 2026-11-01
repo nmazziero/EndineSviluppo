@@ -261,7 +261,7 @@ function buildReportHtml(project, metrics) {
 </head>
 <body>
   <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:${inkSoftC};margin-bottom:18px;line-height:1.6;">
-    Gruppo Endine Sviluppo · Conto economico di progetto<br/>
+    Gruppo Endine Sviluppo · Company Portfolio<br/>
     ${project.name}${project.location ? " — " + project.location : ""} — generato il ${new Date().toLocaleString("it-IT")}
   </div>
 
@@ -963,7 +963,7 @@ export default function Dashboard() {
         </header>
 
         <div className="print-only" style={styles.printHeader}>
-          <div>Gruppo Endine Sviluppo · Conto economico di progetto</div>
+          <div>Gruppo Endine Sviluppo · Company Portfolio</div>
           <div>{active ? active.name : ""} — generato il {new Date().toLocaleString("it-IT")}</div>
         </div>
 
