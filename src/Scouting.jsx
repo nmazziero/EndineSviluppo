@@ -8,6 +8,59 @@ import { kvGet, kvSet } from "./supabaseClient";
 // ---------------------------------------------------------------
 
 const TIPOLOGIE = ["Appartamento", "Villa", "Palazzina", "Altro"];
+// voci di costo principali: il livello (basso/medio/alto) si impara dai costi reali al mq
+const KEY_CATS = ["Opere murarie", "Serramenti e falegnameria", "Opere idrauliche"];
+const KEY_SHORT = { "Opere murarie": "Murarie", "Serramenti e falegnameria": "Serramenti", "Opere idrauliche": "Idraulica" };
+const KEY_CRITERIA = {
+  "Opere murarie": {
+    basso: "ripristini e tinteggiature",
+    medio: "spostamento tramezzi, intonaci, massetti",
+    alto: "demolizioni importanti, opere strutturali, ampliamenti",
+  },
+  "Serramenti e falegnameria": {
+    basso: "sostituzione parziale",
+    medio: "tutti da sostituire, misure standard",
+    alto: "molti infissi, grandi vetrate, taglio termico spinto",
+  },
+  "Opere idrauliche": {
+    basso: "solo bagni",
+    medio: "impianto da rifare in parte",
+    alto: "impianto completo con riscaldamento a pavimento o nuova caldaia",
+  },
+};
+const LEVELS = ["basso", "medio", "alto"];
+
+function percentile(sorted, p) {
+  if (sorted.length === 1) return sorted[0];
+  const idx = (sorted.length - 1) * p;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+}
+
+// Fasce €/mq apprese dai progetti: basso ≈ 15° percentile, medio = mediana, alto ≈ 85° percentile
+// (con almeno ±15% attorno alla mediana). Con un solo progetto le fasce sono ipotesi (-25% / +30%).
+export function levelsFor(values) {
+  const v = values.filter((x) => x > 0).sort((a, b) => a - b);
+  if (!v.length) return null;
+  if (v.length === 1) return { basso: v[0] * 0.75, medio: v[0], alto: v[0] * 1.3, n: 1, assumed: true };
+  const med = percentile(v, 0.5);
+  return {
+    basso: Math.min(percentile(v, 0.15), med * 0.85),
+    medio: med,
+    alto: Math.max(percentile(v, 0.85), med * 1.15),
+    n: v.length,
+    assumed: false,
+  };
+}
+
+// livello "rilevato" di un valore rispetto alle fasce (solo con almeno 3 progetti)
+export function levelOf(value, lev) {
+  if (!lev || lev.n < 3 || !(value > 0)) return null;
+  if (value <= (lev.basso + lev.medio) / 2) return "basso";
+  if (value >= (lev.medio + lev.alto) / 2) return "alto";
+  return "medio";
+}
 const INTERVENTI = ["Ristrutturazione", "Ristrutturazione pesante", "Nuova costruzione"];
 const STATI_PROGETTO = [
   { v: "da_avviare", label: "Da avviare" },
@@ -66,6 +119,17 @@ export function scoutingMetrics(project, ui) {
   const iOut = CLASSI.indexOf(s.classeFine);
   const salto = iIn >= 0 && iOut >= 0 ? iOut - iIn : null;
 
+  const catPerSqm = {};
+  const catFinal = {};
+  KEY_CATS.forEach((cat) => {
+    const rowsC = costs.filter((c) => c.category === cat);
+    const amt = rowsC.reduce((t, c) => t + (Number(c.amount) || 0), 0);
+    catPerSqm[cat] = allSqm > 0 ? amt / allSqm : 0;
+    catFinal[cat] = rowsC.length > 0 && rowsC.every((c) => c.final);
+  });
+  const keySum = KEY_CATS.reduce((t, cat) => t + catPerSqm[cat] * allSqm, 0);
+  const othersPerSqm = allSqm > 0 ? (lavori - keySum) / allSqm : 0;
+
   const omi = Number(s.omi) || 0;
   const omiRatio = omi > 0 && pricePerSqm > 0 ? pricePerSqm / omi : 0;
 
@@ -93,6 +157,9 @@ export function scoutingMetrics(project, ui) {
     revRealPct,
     realPct,
     salto,
+    catPerSqm,
+    catFinal,
+    othersPerSqm,
     omi,
     omiRatio,
     completezza,
@@ -371,6 +438,8 @@ export function ScoutingPage({ projects, onOpenProject, ui }) {
         </div>
       </section>
 
+      <LearnedBands rows={rows} ui={ui} />
+
       <OpportunityPanel rows={rows} ui={ui} />
     </>
   );
@@ -391,7 +460,23 @@ const ESITI = [
 const newDraft = () => ({
   id: null, nome: "", comune: "", mq: 0, prezzo: 0, tipologia: "", intervento: "",
   durata: 12, target: 25, omi: 0, esito: "valutata",
+  livelli: { "Opere murarie": "medio", "Serramenti e falegnameria": "medio", "Opere idrauliche": "medio" },
 });
+
+// fasce apprese per ogni voce principale + scelta fatta nella bozza
+function keyInfoOf(refs, d) {
+  const lv = d.livelli || {};
+  return KEY_CATS.map((cat) => {
+    const obs = refs.filter((r) => r.sm.catPerSqm[cat] > 0);
+    return {
+      cat,
+      lev: levelsFor(obs.map((r) => r.sm.catPerSqm[cat])),
+      n: obs.length,
+      final: obs.filter((r) => r.sm.catFinal[cat]).length,
+      choice: lv[cat] || "medio",
+    };
+  });
+}
 
 // progetti utilizzabili come riferimento + peso
 function buildRefs(rows, d) {
@@ -403,7 +488,6 @@ function buildRefs(rows, d) {
     .map(({ p, sm }) => {
       let w = sm.s.stato === "concluso" ? 1 : 0.4;
       if (d.tipologia && sm.s.tipologia) w *= d.tipologia === sm.s.tipologia ? 1 : 0.5;
-      if (d.intervento && sm.s.intervento) w *= d.intervento === sm.s.intervento ? 1 : 0.5;
       return { p, sm, w };
     });
 }
@@ -433,17 +517,32 @@ function estimateOpp(refs, d) {
   const durata = Number(d.durata) || 12;
   if (!refs.length || mq <= 0) return null;
 
-  const lav = wstat(refs, (sm) => sm.costPerSqmLavori);
   const pr = wstat(refs, (sm) => sm.pricePerSqm);
   const W = refs.reduce((t, r) => t + r.w, 0);
   const realW = refs.reduce((t, r) => t + r.w * r.sm.realPct, 0) / W;
   const mqAvg = refs.reduce((t, r) => t + r.w * r.sm.allSqm, 0) / W;
 
-  // fascia minima ±15% per prudenza; costi +10% in alto se i dati sono ancora preventivi
+  // costi: voci principali dal livello scelto (fasce apprese), tutte le altre a €/mq medio
+  const keyInfo = keyInfoOf(refs, d);
+  const valueAt = (k, shift) => {
+    if (k.choice === "nessuno" || !k.lev) return 0;
+    const j = LEVELS.indexOf(k.choice) + shift;
+    if (j < 0) return k.lev.basso * 0.85;
+    if (j > 2) return k.lev.alto * 1.15;
+    return k.lev[LEVELS[j]];
+  };
+  const keyPer = (shift) => keyInfo.reduce((t, k) => t + valueAt(k, shift), 0);
+  const oth = wstat(refs, (sm) => sm.othersPerSqm);
+  const othBand = {
+    low: Math.min(oth.mean * 0.85, oth.min),
+    mid: oth.mean,
+    high: Math.max(oth.mean * 1.15, oth.max),
+  };
+  // prudente = ogni voce principale un livello più cara; ottimista = un livello più economica
   const cost = {
-    low: Math.min(lav.mean * 0.85, lav.min),
-    mid: lav.mean,
-    high: Math.max(lav.mean * 1.15, lav.max) * (realW < 50 ? 1.1 : 1),
+    low: keyPer(-1) + othBand.low,
+    mid: keyPer(0) + othBand.mid,
+    high: (keyPer(1) + othBand.high) * (realW < 50 ? 1.1 : 1),
   };
   const price = {
     low: Math.min(pr.mean * 0.85, pr.min),
@@ -482,13 +581,18 @@ function estimateOpp(refs, d) {
     warnings.push("I mq sono molto diversi da quelli dei progetti di riferimento: i costi fissi non scalano con i mq, quindi la stima è meno precisa.");
   if (d.tipologia && !refs.some((r) => r.sm.s.tipologia === d.tipologia))
     warnings.push("Non hai nessun progetto della stessa tipologia: stai estrapolando da casi diversi.");
-  if (d.intervento && !refs.some((r) => r.sm.s.intervento === d.intervento))
-    warnings.push("Non hai nessun progetto con lo stesso tipo di intervento: stai estrapolando da casi diversi.");
+  keyInfo.forEach((k) => {
+    const nome = KEY_SHORT[k.cat];
+    if (k.choice === "nessuno") return;
+    if (!k.lev) warnings.push(`${nome}: nessun progetto ha ancora questa voce, quindi è esclusa dalla stima (i costi reali sono probabilmente più alti).`);
+    else if (k.lev.assumed) warnings.push(`${nome}: un solo progetto alle spalle, quindi basso e alto sono ipotesi (-25% / +30% sul medio).`);
+    else if (k.n < 3) warnings.push(`${nome}: ${k.n} progetti, fasce ancora molto approssimative.`);
+  });
   if (refs.length < 3)
     warnings.push(`La stima si basa su ${refs.length} ${refs.length === 1 ? "progetto" : "progetti"}: è un confronto, non una previsione.`);
 
   return {
-    cost, price, base, sensitivity, omiCheck, warnings, n: refs.length, concl, realW,
+    cost, price, keyInfo, base, sensitivity, omiCheck, warnings, n: refs.length, concl, realW,
     maxAtteso: maxFor(base.atteso), maxPrudente: maxFor(base.prudente),
     breakEven: base.prudente.ricavi - base.prudente.lavori,
   };
@@ -587,6 +691,7 @@ function OpportunityPanel({ rows, ui }) {
   const set = (k, v) => setD((x) => ({ ...x, [k]: v }));
   const refs = buildRefs(rows, d);
   const est = estimateOpp(refs, d);
+  const keyInfoUI = keyInfoOf(refs, d);
   const T = Number(d.target) || 0;
   const verdict = est ? verdictOf(est, T) : null;
   const toneColor = verdict ? c[verdict.tone] : c.inkSoft;
@@ -669,7 +774,6 @@ function OpportunityPanel({ rows, ui }) {
             <ui.NumberField style={styles.input} value={d.prezzo} onChange={(v) => set("prezzo", v)} />
           </Field>
           <Field ui={ui} label="Tipologia">{selectOpt("tipologia", TIPOLOGIE, "—")}</Field>
-          <Field ui={ui} label="Intervento">{selectOpt("intervento", INTERVENTI, "—")}</Field>
           <Field ui={ui} label="Durata prevista (mesi)">
             <input style={styles.input} inputMode="numeric" value={d.durata} onChange={(e) => set("durata", e.target.value.replace(/\D/g, ""))} />
           </Field>
@@ -679,6 +783,38 @@ function OpportunityPanel({ rows, ui }) {
           <Field ui={ui} label="Valore zona OMI €/mq (facoltativo)">
             <ui.NumberField style={styles.input} value={d.omi} onChange={(v) => set("omi", v)} />
           </Field>
+        </div>
+
+        <div style={{ marginTop: 20 }}>
+          <div style={{ ...styles.chipLabel, marginBottom: 4 }}>Intensità dei lavori principali</div>
+          <div style={{ fontSize: 12, color: c.inkFaint, marginBottom: 10 }}>
+            Il costo di ogni livello non è deciso da te: viene dai €/mq reali dei tuoi progetti.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 14 }}>
+            {keyInfoUI.map((k) => (
+              <div key={k.cat} style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                <span style={styles.chipLabel}>{k.cat}</span>
+                <select
+                  style={styles.select}
+                  value={k.choice}
+                  onChange={(e) => setD((x) => ({ ...x, livelli: { ...(x.livelli || {}), [k.cat]: e.target.value } }))}
+                >
+                  <option value="nessuno">Nessun intervento</option>
+                  <option value="basso">Basso</option>
+                  <option value="medio">Medio</option>
+                  <option value="alto">Alto</option>
+                </select>
+                <span style={{ fontSize: 11.5, color: c.inkSoft, lineHeight: 1.4 }}>
+                  {k.choice !== "nessuno" && KEY_CRITERIA[k.cat][k.choice] ? `${k.choice[0].toUpperCase() + k.choice.slice(1)}: ${KEY_CRITERIA[k.cat][k.choice]}. ` : ""}
+                </span>
+                <span style={{ fontSize: 11.5, color: c.inkFaint, fontFamily: "'JetBrains Mono', monospace" }}>
+                  {k.lev
+                    ? `${eur(k.lev.basso)} · ${eur(k.lev.medio)} · ${eur(k.lev.alto)} /mq (${k.n} ${k.n === 1 ? "progetto" : "progetti"}${k.lev.assumed ? ", ipotesi" : ""})`
+                    : "nessun dato ancora"}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
 
         {!est && (
@@ -887,5 +1023,77 @@ function OpportunityPanel({ rows, ui }) {
         </div>
       </section>
     </>
+  );
+}
+
+
+// =====================================================================
+// FASCE DI COSTO APPRESE — cosa significano "basso / medio / alto" in €/mq
+// =====================================================================
+function LearnedBands({ rows, ui }) {
+  const { styles, eur } = ui;
+  const c = ui.colors;
+  const refs = buildRefs(rows, {});
+  const th = { padding: "0 10px 8px", textAlign: "left", fontWeight: 500, whiteSpace: "nowrap" };
+  const td = { padding: "10px", borderTop: `1px solid ${c.border}`, fontSize: 13, color: c.ink, verticalAlign: "top" };
+  const num = { ...td, textAlign: "right", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" };
+
+  return (
+    <section style={styles.section} className="section-card no-print">
+      <div style={styles.sectionHeadRow}>
+        <div style={styles.eyebrowSmall}>Fasce di costo apprese (€/mq)</div>
+      </div>
+      <div style={{ fontSize: 12.5, color: c.inkSoft, marginBottom: 14, lineHeight: 1.5 }}>
+        Basso, medio e alto non sono giudizi: sono calcolati dai costi reali al mq dei tuoi progetti e si aggiornano
+        da soli. Con meno di 3 progetti sono ipotesi; da 3 in su il livello di ogni progetto viene assegnato in automatico.
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 760 }}>
+          <thead>
+            <tr style={{ ...styles.tableHeaderRow, display: "table-row" }}>
+              <th style={th}>Voce</th>
+              <th style={{ ...th, textAlign: "right" }}>Basso</th>
+              <th style={{ ...th, textAlign: "right" }}>Medio</th>
+              <th style={{ ...th, textAlign: "right" }}>Alto</th>
+              <th style={{ ...th, textAlign: "right" }}>Progetti</th>
+              <th style={th}>Dettaglio per progetto</th>
+            </tr>
+          </thead>
+          <tbody>
+            {KEY_CATS.map((cat) => {
+              const obs = refs.filter((r) => r.sm.catPerSqm[cat] > 0);
+              const lev = levelsFor(obs.map((r) => r.sm.catPerSqm[cat]));
+              return (
+                <tr key={cat}>
+                  <td style={td}>{cat}</td>
+                  <td style={num}>{lev ? eur(lev.basso) : "—"}</td>
+                  <td style={num}>{lev ? eur(lev.medio) : "—"}</td>
+                  <td style={num}>{lev ? eur(lev.alto) : "—"}</td>
+                  <td style={num}>{obs.length}{lev && lev.assumed ? " (ipotesi)" : ""}</td>
+                  <td style={td}>
+                    {obs.length === 0 && <span style={{ color: c.inkFaint }}>nessun dato</span>}
+                    {obs.map((r) => {
+                      const v = r.sm.catPerSqm[cat];
+                      const lvl = levelOf(v, lev);
+                      return (
+                        <div key={r.p.id} style={{ fontSize: 12.5, color: c.inkSoft, lineHeight: 1.6 }}>
+                          {r.p.name || "Senza nome"}: <b style={{ color: c.ink }}>{eur(v)}/mq</b>
+                          {lvl ? ` → ${lvl}` : ""}
+                          <span style={{ color: c.inkFaint }}> · {r.sm.catFinal[cat] ? "definitivo" : "preventivo"}</span>
+                        </div>
+                      );
+                    })}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 12, color: c.inkFaint, marginTop: 12 }}>
+        Fasce: basso ≈ 15° percentile, medio = mediana, alto ≈ 85° percentile, con almeno ±15% attorno al medio.
+        Entrano nel calcolo i progetti “In corso” o “Concluso” con mq e prezzi inseriti.
+      </div>
+    </section>
   );
 }
