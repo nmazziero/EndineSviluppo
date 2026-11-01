@@ -55,7 +55,10 @@ export function scoutingMetrics(project, ui) {
 
   const finalCosts = costs.filter((c) => c.final).reduce((t, c) => t + (Number(c.amount) || 0), 0);
   const costsRealPct = m.totalCosts > 0 ? (finalCosts / m.totalCosts) * 100 : 0;
-  const revRealPct = m.unitsRevenue > 0 ? (soldRev / m.unitsRevenue) * 100 : 0;
+  const extras = project.extraRevenues || [];
+  const extraSold = extras.filter((r) => r.sold).reduce((tt, r) => tt + (Number(r.amount) || 0), 0);
+  const revTotal = m.unitsRevenue + m.extraRevenue;
+  const revRealPct = revTotal > 0 ? ((soldRev + extraSold) / revTotal) * 100 : 0;
   // percentuale di dati reali: media fra costi definitivi e ricavi venduti
   const realPct = (costsRealPct + revRealPct) / 2;
 
