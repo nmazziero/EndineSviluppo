@@ -903,7 +903,7 @@ export default function Dashboard() {
             <img src={logoScuro} alt="Endine Sviluppo Holding" style={{ height: 62, width: "auto", display: "block" }} />
             <div>
               <div style={styles.eyebrow}>Gruppo Endine Sviluppo</div>
-              <h1 style={styles.title}>Company Dashboard</h1>
+              <h1 style={styles.title}>Company Portfolio</h1>
             </div>
           </div>
           <div style={styles.headerRight}>
