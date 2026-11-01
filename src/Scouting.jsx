@@ -459,7 +459,7 @@ const ESITI = [
 ];
 const newDraft = () => ({
   id: null, nome: "", comune: "", mq: 0, prezzo: 0, tipologia: "", intervento: "",
-  durata: 12, target: 25, omi: 0, esito: "valutata",
+  durata: 12, target: 25, omi: 0, venditore: 0, pesaVenditore: false, pesoVenditore: 25, esito: "valutata",
   livelli: { "Opere murarie": "medio", "Serramenti e falegnameria": "medio", "Opere idrauliche": "medio" },
 });
 
@@ -550,14 +550,28 @@ function estimateOpp(refs, d) {
     high: Math.max(pr.mean * 1.15, pr.max),
   };
 
+  const ven = Number(d.venditore) || 0;
+  // stima pura dai progetti (prima dell'eventuale peso del venditore)
+  const priceModel = { ...price };
+  const useVen = !!d.pesaVenditore && ven > 0;
+  const wVen = Math.min(50, Math.max(0, Number(d.pesoVenditore) || 0)) / 100;
+  if (useVen) {
+    price.mid = (1 - wVen) * priceModel.mid + wVen * (ven / mq);
+    price.high = Math.max(price.high, price.mid);
+    price.low = Math.min(price.low, price.mid);
+  }
   const sc = (acqX) => ({
     prudente: scenario(mq, acqX, cost.high, price.low, durata),
     atteso: scenario(mq, acqX, cost.mid, price.mid, durata),
     ottimista: scenario(mq, acqX, cost.low, price.high, durata),
+    // aspettativa del venditore: ricavo totale dato da te, costi attesi
+    ...(ven > 0 ? { venditore: scenario(mq, acqX, cost.mid, ven / mq, durata) } : {}),
   });
   const base = sc(acq);
   const T = Number(d.target) || 0;
   const maxFor = (s) => s.ricavi / (1 + T / 100) - s.lavori;
+  const venPerSqm = ven > 0 ? ven / mq : 0;
+  const venVsAtteso = ven > 0 && priceModel.mid > 0 ? (venPerSqm / priceModel.mid - 1) * 100 : 0;
   const sensitivity = [-20, -10, 0, 10, 20].map((dp) => ({ dp, acq: acq * (1 + dp / 100), ...sc(acq * (1 + dp / 100)) }));
 
   // controllo con valore zona OMI
@@ -588,12 +602,16 @@ function estimateOpp(refs, d) {
     else if (k.lev.assumed) warnings.push(`${nome}: un solo progetto alle spalle, quindi basso e alto sono ipotesi (-25% / +30% sul medio).`);
     else if (k.n < 3) warnings.push(`${nome}: ${k.n} progetti, fasce ancora molto approssimative.`);
   });
+  if (ven > 0 && venPerSqm > priceModel.high)
+    warnings.push(`L’aspettativa del venditore (${Math.round(venPerSqm)} €/mq) è sopra anche il tuo scenario ottimista (${Math.round(priceModel.high)} €/mq): è più ottimista di tutto ciò che hai realizzato finora.`);
   if (refs.length < 3)
     warnings.push(`La stima si basa su ${refs.length} ${refs.length === 1 ? "progetto" : "progetti"}: è un confronto, non una previsione.`);
 
   return {
-    cost, price, keyInfo, base, sensitivity, omiCheck, warnings, n: refs.length, concl, realW,
+    cost, price, priceModel, useVen, wVen, keyInfo, base, sensitivity, omiCheck, warnings, n: refs.length, concl, realW,
     maxAtteso: maxFor(base.atteso), maxPrudente: maxFor(base.prudente),
+    maxVenditore: base.venditore ? maxFor(base.venditore) : null,
+    venPerSqm, venVsAtteso,
     breakEven: base.prudente.ricavi - base.prudente.lavori,
   };
 }
@@ -612,10 +630,10 @@ function GradientBar({ est, T, ui }) {
   const lo = -10;
   const hi = Math.max(T * 2, 20);
   const pos = (x) => Math.min(100, Math.max(0, ((x - lo) / (hi - lo)) * 100));
-  const { prudente, atteso, ottimista } = est.base;
+  const { prudente, atteso, ottimista, venditore } = est.base;
   const grad = `linear-gradient(90deg, ${c.red} 0%, ${c.red} ${pos(0)}%, ${c.amber} ${pos(T * 0.6)}%, ${c.green} ${pos(T)}%, ${c.green} 100%)`;
   return (
-    <div style={{ margin: "34px 4px 30px", position: "relative" }}>
+    <div style={{ margin: `34px 4px ${venditore ? 54 : 30}px`, position: "relative" }}>
       <div style={{ height: 16, borderRadius: 8, background: grad, position: "relative", overflow: "hidden" }}>
         <div
           style={{
@@ -642,6 +660,23 @@ function GradientBar({ est, T, ui }) {
       >
         atteso {atteso.roi.toFixed(1)}%
       </div>
+      {/* aspettativa del venditore */}
+      {venditore && (
+        <>
+          <div style={{ position: "absolute", left: `${pos(venditore.roi)}%`, top: 8, transform: "translateX(-50%)" }}>
+            <div style={{ width: 4, height: 38, background: c.teal, borderRadius: 2 }} />
+          </div>
+          <div
+            style={{
+              position: "absolute", top: 48, left: `${pos(venditore.roi)}%`,
+              transform: `translateX(-${pos(venditore.roi)}%)`,
+              whiteSpace: "nowrap", fontSize: 12, fontWeight: 700, color: c.teal,
+            }}
+          >
+            venditore {venditore.roi.toFixed(1)}%
+          </div>
+        </>
+      )}
       {/* obiettivo */}
       <div style={{ position: "absolute", left: `${pos(T)}%`, top: 22, transform: "translateX(-50%)", fontSize: 11, color: c.inkSoft, whiteSpace: "nowrap" }}>
         ▲ obiettivo {T}%
@@ -783,6 +818,39 @@ function OpportunityPanel({ rows, ui }) {
           <Field ui={ui} label="Valore zona OMI €/mq (facoltativo)">
             <ui.NumberField style={styles.input} value={d.omi} onChange={(v) => set("omi", v)} />
           </Field>
+          <Field ui={ui} label="Vendita totale attesa dal venditore (€, facoltativo)">
+            <ui.NumberField style={styles.input} value={d.venditore} onChange={(v) => set("venditore", v)} />
+          </Field>
+        </div>
+
+        <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={!!d.pesaVenditore}
+            style={styles.pieSwitchBtn}
+            onClick={() => set("pesaVenditore", !d.pesaVenditore)}
+          >
+            <span>Considera l’aspettativa del venditore nella stima attesa</span>
+            <span style={{ ...styles.pieSwitchTrack, background: d.pesaVenditore ? c.teal : c.border }}>
+              <span style={{ ...styles.pieSwitchKnob, left: d.pesaVenditore ? 18 : 2 }} />
+            </span>
+          </button>
+          {d.pesaVenditore && (
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: c.inkSoft }}>
+              Peso
+              <input
+                style={{ ...styles.input, width: 64, textAlign: "right" }}
+                inputMode="numeric"
+                value={d.pesoVenditore}
+                onChange={(e) => set("pesoVenditore", e.target.value.replace(/\D/g, "").slice(0, 2))}
+              />
+              % (max 50)
+            </label>
+          )}
+          {d.pesaVenditore && !(Number(d.venditore) > 0) && (
+            <span style={{ fontSize: 12, color: c.amber }}>Inserisci la vendita attesa dal venditore per attivarlo.</span>
+          )}
         </div>
 
         <div style={{ marginTop: 20 }}>
@@ -836,8 +904,14 @@ function OpportunityPanel({ rows, ui }) {
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
               {scen("Prudente", est.base.prudente, "costi alti, prezzi bassi")}
-              {scen("Atteso", est.base.atteso, "medie dei progetti simili")}
+              {scen("Atteso", est.base.atteso, est.useVen ? `progetti simili + ${Math.round(est.wVen * 100)}% venditore` : "medie dei progetti simili")}
               {scen("Ottimista", est.base.ottimista, "costi bassi, prezzi alti")}
+              {est.base.venditore &&
+                scen(
+                  "Venditore",
+                  est.base.venditore,
+                  `costi attesi · ${eur(est.venPerSqm)}/mq (${est.venVsAtteso >= 0 ? "+" : ""}${est.venVsAtteso.toFixed(0)}% vs atteso)`
+                )}
             </div>
 
             <div style={styles.chipsRow}>
@@ -864,6 +938,12 @@ function OpportunityPanel({ rows, ui }) {
                 <span style={styles.chipLabel}>…con scenario prudente</span>
                 <span style={styles.chipValue}>{eur(Math.max(0, est.maxPrudente))}</span>
               </div>
+              {est.maxVenditore !== null && (
+                <div style={styles.chip}>
+                  <span style={styles.chipLabel}>…se vendi come dice il venditore</span>
+                  <span style={styles.chipValue}>{eur(Math.max(0, est.maxVenditore))}</span>
+                </div>
+              )}
               <div style={styles.chip}>
                 <span style={styles.chipLabel}>Pareggio (prudente, ROI 0%)</span>
                 <span style={styles.chipValue}>{eur(Math.max(0, est.breakEven))}</span>
@@ -876,8 +956,8 @@ function OpportunityPanel({ rows, ui }) {
                   <>
                     Controllo con valore zona: i tuoi progetti hanno venduto in media al{" "}
                     <b>{(est.omiCheck.ratio * 100).toFixed(0)}%</b> del valore OMI, che qui darebbe circa{" "}
-                    <b>{eur(est.omiCheck.priceFromOmi)}/mq</b> contro {eur(est.price.mid)}/mq della stima sopra
-                    ({est.price.mid > 0 ? (((est.omiCheck.priceFromOmi - est.price.mid) / est.price.mid) * 100).toFixed(0) : 0}% di differenza).
+                    <b>{eur(est.omiCheck.priceFromOmi)}/mq</b> contro {eur(est.priceModel.mid)}/mq della stima dai tuoi progetti
+                    ({est.priceModel.mid > 0 ? (((est.omiCheck.priceFromOmi - est.priceModel.mid) / est.priceModel.mid) * 100).toFixed(0) : 0}% di differenza).
                   </>
                 ) : (
                   <>Per attivare il controllo con il valore zona, compila “Valore zona OMI” anche nelle schede dei progetti passati.</>
@@ -895,6 +975,7 @@ function OpportunityPanel({ rows, ui }) {
                       <th style={{ ...th, textAlign: "right" }}>ROI prudente</th>
                       <th style={{ ...th, textAlign: "right" }}>ROI atteso</th>
                       <th style={{ ...th, textAlign: "right" }}>ROI ottimista</th>
+                      {est.base.venditore && <th style={{ ...th, textAlign: "right" }}>ROI venditore</th>}
                       <th style={{ ...th, textAlign: "right" }}>Utile atteso</th>
                     </tr>
                   </thead>
@@ -907,6 +988,7 @@ function OpportunityPanel({ rows, ui }) {
                         <td style={{ ...num, color: roiColor(r.prudente.roi) }}>{pct(r.prudente.roi)}</td>
                         <td style={{ ...num, color: roiColor(r.atteso.roi) }}>{pct(r.atteso.roi)}</td>
                         <td style={{ ...num, color: roiColor(r.ottimista.roi) }}>{pct(r.ottimista.roi)}</td>
+                        {r.venditore && <td style={{ ...num, color: roiColor(r.venditore.roi) }}>{pct(r.venditore.roi)}</td>}
                         <td style={num}>{eur(r.atteso.utile)}</td>
                       </tr>
                     ))}
