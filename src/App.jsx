@@ -1444,6 +1444,7 @@ function CostsSection({ project, onChange, metrics }) {
           <div>Categoria</div>
           <div>Descrizione</div>
           <div>Importo</div>
+          <div style={{ textAlign: "center" }}>Venduto</div>
           <div style={{ textAlign: "center" }}>Finale</div>
           <div />
         </div>
@@ -1692,13 +1693,13 @@ function ExtraRevenueSection({ project, onChange, metrics }) {
       </datalist>
 
       <div style={styles.tableWrap}>
-        <div style={{ ...styles.tableHeaderRow, gridTemplateColumns: "2fr 1fr 40px" }}>
+        <div style={{ ...styles.tableHeaderRow, gridTemplateColumns: "2fr 1fr 70px 40px" }}>
           <div>Voce</div>
           <div style={{ textAlign: "right" }}>Importo</div>
           <div />
         </div>
         {rows.map((r) => (
-          <div key={r.id} style={{ ...styles.tableRow, gridTemplateColumns: "2fr 1fr 40px" }}>
+          <div key={r.id} style={{ ...styles.tableRow, gridTemplateColumns: "2fr 1fr 70px 40px" }}>
             <input
               style={styles.input}
               list="extra-revenue-suggestions"
@@ -1711,6 +1712,13 @@ function ExtraRevenueSection({ project, onChange, metrics }) {
               value={r.amount}
               onChange={(v) => updateRow(r.id, "amount", v)}
             />
+            <label style={styles.checkboxWrap} title="Spunta quando questo ricavo è definitivo/incassato. Senza spunta è ancora previsto.">
+  <input
+    type="checkbox"
+    checked={!!r.sold}
+    onChange={(e) => updateRow(r.id, "sold", e.target.checked)}
+  />
+</label>
             <button style={styles.rowDeleteBtn} className="no-print" onClick={() => removeRow(r.id)} aria-label="Elimina riga">×</button>
           </div>
         ))}
