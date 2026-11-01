@@ -295,12 +295,23 @@ export function ScoutingCard({ project, onChange, ui }) {
 
 // ---------- interruttore Progetti / Scouting ----------
 export function ViewSwitch({ view, setView, ui }) {
-  const { styles } = ui;
+  const c = ui.colors;
+  const page = "#101825"; // colore dello sfondo della pagina nella zona delle linguette
+  const strip = c.surface || "#131A26"; // colore della fascia delle linguette
+  const hover = c.surfaceAlt || "#1B2433";
   return (
     <>
-      <div className="no-print" style={{ display: "flex", gap: 8, marginBottom: 18 }}>
-        {/* regola usata per nascondere le linguette dei progetti nelle altre viste */}
-        <style>{`.hidden-view { display: none !important; }`}</style>
+      <style>{`
+        .hidden-view { display: none !important; }
+        .vtabs { display: flex; align-items: flex-end; gap: 2px; padding: 8px 14px 0; background: ${strip}; border-radius: 12px 12px 0 0; margin-bottom: 18px; }
+        .vtab { position: relative; font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 600; color: ${c.inkSoft}; background: transparent; border: none; cursor: pointer; padding: 9px 22px 10px; border-radius: 10px 10px 0 0; }
+        .vtab:hover { background: ${hover}; color: ${c.ink}; }
+        .vtab.active { background: ${page}; color: ${c.ink}; cursor: default; }
+        .vtab.active::before, .vtab.active::after { content: ""; position: absolute; bottom: 0; width: 10px; height: 10px; pointer-events: none; }
+        .vtab.active::before { left: -10px; background: radial-gradient(circle at 0 0, transparent 10px, ${page} 10.5px); }
+        .vtab.active::after { right: -10px; background: radial-gradient(circle at 100% 0, transparent 10px, ${page} 10.5px); }
+      `}</style>
+      <div className="vtabs no-print" role="tablist">
         {[
           { v: "projects", label: "Progetti" },
           { v: "scouting", label: "Scouting" },
@@ -308,8 +319,10 @@ export function ViewSwitch({ view, setView, ui }) {
         ].map((t) => (
           <button
             key={t.v}
+            role="tab"
+            aria-selected={view === t.v}
+            className={view === t.v ? "vtab active" : "vtab"}
             onClick={() => setView(t.v)}
-            style={{ ...styles.tab, ...(view === t.v ? styles.tabActive : {}) }}
           >
             {t.label}
           </button>
