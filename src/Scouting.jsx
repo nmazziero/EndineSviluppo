@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
+import { kvGet, kvSet } from "./supabaseClient";
 
 // ---------------------------------------------------------------
 // SCOUTING — scheda per progetto + pagina di confronto
@@ -62,6 +63,9 @@ export function scoutingMetrics(project, ui) {
   const iOut = CLASSI.indexOf(s.classeFine);
   const salto = iIn >= 0 && iOut >= 0 ? iOut - iIn : null;
 
+  const omi = Number(s.omi) || 0;
+  const omiRatio = omi > 0 && pricePerSqm > 0 ? pricePerSqm / omi : 0;
+
   const core = [
     !!s.tipologia,
     !!s.intervento,
@@ -86,6 +90,8 @@ export function scoutingMetrics(project, ui) {
     revRealPct,
     realPct,
     salto,
+    omi,
+    omiRatio,
     completezza,
     coreTotal: core.length,
   };
@@ -166,13 +172,20 @@ export function ScoutingCard({ project, onChange, ui }) {
         </Field>
       </div>
 
-      <div style={{ marginTop: 14 }}>
+      <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14 }}>
         <Field ui={ui} label="Nota sulla zona (facoltativa)">
           <input
             style={styles.input}
             placeholder="es. vicino al lago, zona servita, molta richiesta…"
             value={s.zonaNota ?? ""}
             onChange={(e) => set("zonaNota", e.target.value)}
+          />
+        </Field>
+        <Field ui={ui} label="Valore zona OMI €/mq (facoltativo)">
+          <ui.NumberField
+            style={styles.input}
+            value={s.omi ?? 0}
+            onChange={(v) => set("omi", v)}
           />
         </Field>
       </div>
@@ -352,6 +365,522 @@ export function ScoutingPage({ projects, onOpenProject, ui }) {
         <div style={{ fontSize: 12, color: c.inkFaint, marginTop: 12 }}>
           Clicca sul nome di un progetto per aprirlo e completare la scheda. “Lavori/mq” esclude la categoria
           Acquisto. “prev.” = prezzo ancora previsto, “reale” = tutte le unità spuntate come vendute.
+        </div>
+      </section>
+
+      <OpportunityPanel rows={rows} ui={ui} />
+    </>
+  );
+}
+
+
+// =====================================================================
+// NUOVA OPPORTUNITÀ — stima a scenari basata sui progetti già fatti
+// =====================================================================
+const OPP_KEY = "gruppo-endine:opportunities";
+const TAX_RATE = 28;
+const ESITI = [
+  { v: "valutata", label: "Valutata" },
+  { v: "acquistata", label: "Acquistata" },
+  { v: "scartata", label: "Scartata" },
+  { v: "persa", label: "Persa" },
+];
+const newDraft = () => ({
+  id: null, nome: "", comune: "", mq: 0, prezzo: 0, tipologia: "", intervento: "",
+  durata: 12, target: 25, omi: 0, esito: "valutata",
+});
+
+// progetti utilizzabili come riferimento + peso
+function buildRefs(rows, d) {
+  return rows
+    .filter(({ sm }) => {
+      const st = sm.s.stato || "";
+      return (st === "concluso" || st === "in_corso") && sm.allSqm > 0 && sm.lavori > 0 && sm.pricePerSqm > 0;
+    })
+    .map(({ p, sm }) => {
+      let w = sm.s.stato === "concluso" ? 1 : 0.4;
+      if (d.tipologia && sm.s.tipologia) w *= d.tipologia === sm.s.tipologia ? 1 : 0.5;
+      if (d.intervento && sm.s.intervento) w *= d.intervento === sm.s.intervento ? 1 : 0.5;
+      return { p, sm, w };
+    });
+}
+
+function wstat(refs, f) {
+  const W = refs.reduce((t, r) => t + r.w, 0);
+  const vals = refs.map((r) => f(r.sm));
+  const mean = refs.reduce((t, r, i) => t + r.w * vals[i], 0) / W;
+  return { mean, min: Math.min(...vals), max: Math.max(...vals) };
+}
+
+function scenario(mq, acq, lavPerSqm, pricePerSqm, durata) {
+  const lavori = lavPerSqm * mq;
+  const costi = acq + lavori;
+  const ricavi = pricePerSqm * mq;
+  const utile = ricavi - costi;
+  const roi = costi > 0 ? (utile / costi) * 100 : 0;
+  const imposte = utile > 0 ? (utile * TAX_RATE) / 100 : 0;
+  const roiNet = costi > 0 ? ((utile - imposte) / costi) * 100 : 0;
+  const dur = durata > 0 ? durata : 12;
+  return { lavori, costi, ricavi, utile, roi, roiNet, roiNetAnn: roiNet * (12 / dur) };
+}
+
+function estimateOpp(refs, d) {
+  const mq = Number(d.mq) || 0;
+  const acq = Number(d.prezzo) || 0;
+  const durata = Number(d.durata) || 12;
+  if (!refs.length || mq <= 0) return null;
+
+  const lav = wstat(refs, (sm) => sm.costPerSqmLavori);
+  const pr = wstat(refs, (sm) => sm.pricePerSqm);
+  const W = refs.reduce((t, r) => t + r.w, 0);
+  const realW = refs.reduce((t, r) => t + r.w * r.sm.realPct, 0) / W;
+  const mqAvg = refs.reduce((t, r) => t + r.w * r.sm.allSqm, 0) / W;
+
+  // fascia minima ±15% per prudenza; costi +10% in alto se i dati sono ancora preventivi
+  const cost = {
+    low: Math.min(lav.mean * 0.85, lav.min),
+    mid: lav.mean,
+    high: Math.max(lav.mean * 1.15, lav.max) * (realW < 50 ? 1.1 : 1),
+  };
+  const price = {
+    low: Math.min(pr.mean * 0.85, pr.min),
+    mid: pr.mean,
+    high: Math.max(pr.mean * 1.15, pr.max),
+  };
+
+  const sc = (acqX) => ({
+    prudente: scenario(mq, acqX, cost.high, price.low, durata),
+    atteso: scenario(mq, acqX, cost.mid, price.mid, durata),
+    ottimista: scenario(mq, acqX, cost.low, price.high, durata),
+  });
+  const base = sc(acq);
+  const T = Number(d.target) || 0;
+  const maxFor = (s) => s.ricavi / (1 + T / 100) - s.lavori;
+  const sensitivity = [-20, -10, 0, 10, 20].map((dp) => ({ dp, acq: acq * (1 + dp / 100), ...sc(acq * (1 + dp / 100)) }));
+
+  // controllo con valore zona OMI
+  let omiCheck = null;
+  const omiOpp = Number(d.omi) || 0;
+  if (omiOpp > 0) {
+    const withRatio = refs.filter((r) => r.sm.omiRatio > 0);
+    if (withRatio.length) {
+      const Wr = withRatio.reduce((t, r) => t + r.w, 0);
+      const ratio = withRatio.reduce((t, r) => t + r.w * r.sm.omiRatio, 0) / Wr;
+      omiCheck = { priceFromOmi: omiOpp * ratio, ratio, n: withRatio.length };
+    } else {
+      omiCheck = { priceFromOmi: 0, ratio: 0, n: 0 };
+    }
+  }
+
+  const concl = refs.filter((r) => r.sm.s.stato === "concluso").length;
+  const warnings = [];
+  if (realW < 50) warnings.push("I progetti di riferimento hanno ancora molti costi preventivi: ho allargato la fascia dei costi verso l’alto del 10%.");
+  if (mq < mqAvg * 0.6 || mq > mqAvg * 1.6)
+    warnings.push("I mq sono molto diversi da quelli dei progetti di riferimento: i costi fissi non scalano con i mq, quindi la stima è meno precisa.");
+  if (d.tipologia && !refs.some((r) => r.sm.s.tipologia === d.tipologia))
+    warnings.push("Non hai nessun progetto della stessa tipologia: stai estrapolando da casi diversi.");
+  if (d.intervento && !refs.some((r) => r.sm.s.intervento === d.intervento))
+    warnings.push("Non hai nessun progetto con lo stesso tipo di intervento: stai estrapolando da casi diversi.");
+  if (refs.length < 3)
+    warnings.push(`La stima si basa su ${refs.length} ${refs.length === 1 ? "progetto" : "progetti"}: è un confronto, non una previsione.`);
+
+  return {
+    cost, price, base, sensitivity, omiCheck, warnings, n: refs.length, concl, realW,
+    maxAtteso: maxFor(base.atteso), maxPrudente: maxFor(base.prudente),
+    breakEven: base.prudente.ricavi - base.prudente.lavori,
+  };
+}
+
+function verdictOf(est, T) {
+  const { prudente, atteso } = est.base;
+  if (prudente.roi >= T) return { t: "Molto buono", d: "anche nello scenario prudente raggiungi il ROI desiderato.", tone: "green" };
+  if (atteso.roi >= T && prudente.roi >= 0) return { t: "Buono", d: "lo scenario atteso raggiunge il ROI desiderato e nel prudente non perdi.", tone: "green" };
+  if (atteso.roi >= T) return { t: "Rischioso", d: "lo scenario atteso raggiunge il ROI, ma nel prudente vai in perdita.", tone: "amber" };
+  if (atteso.roi >= T * 0.6) return { t: "Al limite", d: "positivo ma sotto il ROI desiderato.", tone: "amber" };
+  return { t: "Non conviene a questo prezzo", d: "il ROI atteso è molto sotto l’obiettivo.", tone: "red" };
+}
+
+function GradientBar({ est, T, ui }) {
+  const c = ui.colors;
+  const lo = -10;
+  const hi = Math.max(T * 2, 20);
+  const pos = (x) => Math.min(100, Math.max(0, ((x - lo) / (hi - lo)) * 100));
+  const { prudente, atteso, ottimista } = est.base;
+  const grad = `linear-gradient(90deg, ${c.red} 0%, ${c.red} ${pos(0)}%, ${c.amber} ${pos(T * 0.6)}%, ${c.green} ${pos(T)}%, ${c.green} 100%)`;
+  return (
+    <div style={{ margin: "34px 4px 30px", position: "relative" }}>
+      <div style={{ height: 16, borderRadius: 8, background: grad, position: "relative", overflow: "hidden" }}>
+        <div
+          style={{
+            position: "absolute", top: 0, bottom: 0,
+            left: `${pos(prudente.roi)}%`,
+            width: `${Math.max(0.5, pos(ottimista.roi) - pos(prudente.roi))}%`,
+            background: "rgba(255,255,255,0.28)",
+            borderLeft: "2px solid rgba(255,255,255,0.85)",
+            borderRight: "2px solid rgba(255,255,255,0.85)",
+          }}
+          title="Fascia fra scenario prudente e ottimista"
+        />
+      </div>
+      {/* marcatore atteso */}
+      <div style={{ position: "absolute", left: `${pos(atteso.roi)}%`, top: -8, transform: "translateX(-50%)" }}>
+        <div style={{ width: 4, height: 32, background: c.ink, borderRadius: 2 }} />
+      </div>
+      <div
+        style={{
+          position: "absolute", top: -30, left: `${pos(atteso.roi)}%`,
+          transform: `translateX(-${pos(atteso.roi)}%)`,
+          whiteSpace: "nowrap", fontSize: 12, fontWeight: 700, color: c.ink,
+        }}
+      >
+        atteso {atteso.roi.toFixed(1)}%
+      </div>
+      {/* obiettivo */}
+      <div style={{ position: "absolute", left: `${pos(T)}%`, top: 22, transform: "translateX(-50%)", fontSize: 11, color: c.inkSoft, whiteSpace: "nowrap" }}>
+        ▲ obiettivo {T}%
+      </div>
+      <div style={{ position: "absolute", left: `${pos(0)}%`, top: 22, transform: "translateX(-50%)", fontSize: 11, color: c.inkFaint }}>
+        ▲ 0%
+      </div>
+    </div>
+  );
+}
+
+function OpportunityPanel({ rows, ui }) {
+  const { styles, eur, pct } = ui;
+  const c = ui.colors;
+  const [d, setD] = useState(newDraft());
+  const [opps, setOpps] = useState(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const v = await kvGet(OPP_KEY);
+        setOpps(Array.isArray(v) ? v : []);
+      } catch (e) {
+        setLoadFailed(true);
+        setOpps([]);
+      }
+    })();
+  }, []);
+
+  const persist = async (next) => {
+    if (loadFailed) {
+      setSaveMsg("Archivio non raggiungibile: non salvo per non sovrascrivere i dati esistenti. Ricarica la pagina.");
+      return;
+    }
+    setOpps(next);
+    try {
+      await kvSet(OPP_KEY, next);
+      setSaveMsg("Salvato ✓");
+    } catch (e) {
+      setSaveMsg("Errore nel salvataggio");
+    }
+    setTimeout(() => setSaveMsg(""), 2500);
+  };
+
+  const set = (k, v) => setD((x) => ({ ...x, [k]: v }));
+  const refs = buildRefs(rows, d);
+  const est = estimateOpp(refs, d);
+  const T = Number(d.target) || 0;
+  const verdict = est ? verdictOf(est, T) : null;
+  const toneColor = verdict ? c[verdict.tone] : c.inkSoft;
+
+  const saveOpp = () => {
+    const entry = {
+      ...d,
+      id: d.id || Math.random().toString(36).slice(2, 10),
+      ts: new Date().toISOString(),
+      roiAtteso: est ? est.base.atteso.roi : null,
+      roiPrudente: est ? est.base.prudente.roi : null,
+      verdetto: verdict ? verdict.t : "",
+    };
+    const list = opps || [];
+    const exists = list.some((o) => o.id === entry.id);
+    persist(exists ? list.map((o) => (o.id === entry.id ? entry : o)) : [...list, entry]);
+    setD({ ...entry });
+  };
+
+  const th = { padding: "0 10px 8px", textAlign: "left", fontWeight: 500, whiteSpace: "nowrap" };
+  const td = { padding: "9px 10px", borderTop: `1px solid ${c.border}`, whiteSpace: "nowrap", fontSize: 13, color: c.ink };
+  const num = { ...td, textAlign: "right", fontFamily: "'JetBrains Mono', monospace" };
+  const roiColor = (v) => (v >= T ? c.green : v >= 0 ? c.amber : c.red);
+
+  const scen = (title, s, note) => (
+    <div style={{ background: c.surfaceAlt, border: `1px solid ${c.border}`, borderRadius: 12, padding: "14px 16px" }}>
+      <div style={{ ...styles.chipLabel, marginBottom: 2 }}>{title}</div>
+      <div style={{ fontSize: 11.5, color: c.inkFaint, marginBottom: 10 }}>{note}</div>
+      {[
+        ["Costi totali", eur(s.costi)],
+        ["Ricavi", eur(s.ricavi)],
+        ["Utile lordo", eur(s.utile)],
+      ].map(([k, v]) => (
+        <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "3px 0", color: c.inkSoft }}>
+          <span>{k}</span>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", color: c.ink }}>{v}</span>
+        </div>
+      ))}
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, paddingTop: 8, borderTop: `1px solid ${c.border}` }}>
+        <span style={{ fontSize: 12, color: c.inkSoft }}>ROI lordo</span>
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: roiColor(s.roi) }}>{pct(s.roi)}</span>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+        <span style={{ fontSize: 12, color: c.inkSoft }}>ROI netto annualizzato</span>
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", color: c.ink }}>{pct(s.roiNetAnn)}</span>
+      </div>
+    </div>
+  );
+
+  const selectOpt = (key, options, ph) => (
+    <select style={styles.select} value={d[key]} onChange={(e) => set(key, e.target.value)}>
+      <option value="">{ph}</option>
+      {options.map((o) => (
+        <option key={o} value={o}>{o}</option>
+      ))}
+    </select>
+  );
+
+  return (
+    <>
+      <section style={styles.section} className="section-card no-print">
+        <div style={styles.sectionHeadRow}>
+          <div style={styles.eyebrowSmall}>Nuova opportunità</div>
+          <div style={{ ...styles.chipLabel, textTransform: "none" }}>
+            stima dai tuoi progetti · senza oneri finanziari
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 14 }}>
+          <Field ui={ui} label="Nome / indirizzo">
+            <input style={styles.input} placeholder="es. Via Roma 12" value={d.nome} onChange={(e) => set("nome", e.target.value)} />
+          </Field>
+          <Field ui={ui} label="Comune">
+            <input style={styles.input} value={d.comune} onChange={(e) => set("comune", e.target.value)} />
+          </Field>
+          <Field ui={ui} label="Mq totali">
+            <ui.NumberField style={styles.input} value={d.mq} onChange={(v) => set("mq", v)} />
+          </Field>
+          <Field ui={ui} label="Prezzo di acquisto (€)">
+            <ui.NumberField style={styles.input} value={d.prezzo} onChange={(v) => set("prezzo", v)} />
+          </Field>
+          <Field ui={ui} label="Tipologia">{selectOpt("tipologia", TIPOLOGIE, "—")}</Field>
+          <Field ui={ui} label="Intervento">{selectOpt("intervento", INTERVENTI, "—")}</Field>
+          <Field ui={ui} label="Durata prevista (mesi)">
+            <input style={styles.input} inputMode="numeric" value={d.durata} onChange={(e) => set("durata", e.target.value.replace(/\D/g, ""))} />
+          </Field>
+          <Field ui={ui} label="ROI lordo desiderato (%)">
+            <input style={styles.input} inputMode="numeric" value={d.target} onChange={(e) => set("target", e.target.value.replace(/\D/g, ""))} />
+          </Field>
+          <Field ui={ui} label="Valore zona OMI €/mq (facoltativo)">
+            <ui.NumberField style={styles.input} value={d.omi} onChange={(v) => set("omi", v)} />
+          </Field>
+        </div>
+
+        {!est && (
+          <div style={{ ...styles.tableEmpty, marginTop: 18 }}>
+            {refs.length === 0
+              ? "Per attivare la stima serve almeno un progetto “In corso” o “Concluso” con mq, costi e prezzi di vendita inseriti (vedi la Scheda scouting di ogni progetto)."
+              : "Inserisci i mq dell’immobile per vedere la stima."}
+          </div>
+        )}
+
+        {est && verdict && (
+          <>
+            <div style={{ marginTop: 22, display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+              <span style={{ fontFamily: "'Sora', sans-serif", fontWeight: 700, fontSize: 22, color: toneColor }}>{verdict.t}</span>
+              <span style={{ fontSize: 13, color: c.inkSoft }}>{verdict.d}</span>
+            </div>
+
+            <GradientBar est={est} T={T} ui={ui} />
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
+              {scen("Prudente", est.base.prudente, "costi alti, prezzi bassi")}
+              {scen("Atteso", est.base.atteso, "medie dei progetti simili")}
+              {scen("Ottimista", est.base.ottimista, "costi bassi, prezzi alti")}
+            </div>
+
+            <div style={styles.chipsRow}>
+              <div style={styles.chip}>
+                <span style={styles.chipLabel}>Lavori / mq (prud. – atteso – ott.)</span>
+                <span style={styles.chipValue}>
+                  {eur(est.cost.high)} · {eur(est.cost.mid)} · {eur(est.cost.low)}
+                </span>
+              </div>
+              <div style={styles.chip}>
+                <span style={styles.chipLabel}>Prezzo vendita / mq (prud. – atteso – ott.)</span>
+                <span style={styles.chipValue}>
+                  {eur(est.price.low)} · {eur(est.price.mid)} · {eur(est.price.high)}
+                </span>
+              </div>
+            </div>
+
+            <div style={{ ...styles.chipsRow, marginTop: 10 }}>
+              <div style={{ ...styles.chip, ...styles.chipTotal }}>
+                <span style={styles.chipLabel}>Prezzo max di acquisto per ROI {T}% (atteso)</span>
+                <span style={styles.chipValue}>{eur(Math.max(0, est.maxAtteso))}</span>
+              </div>
+              <div style={styles.chip}>
+                <span style={styles.chipLabel}>…con scenario prudente</span>
+                <span style={styles.chipValue}>{eur(Math.max(0, est.maxPrudente))}</span>
+              </div>
+              <div style={styles.chip}>
+                <span style={styles.chipLabel}>Pareggio (prudente, ROI 0%)</span>
+                <span style={styles.chipValue}>{eur(Math.max(0, est.breakEven))}</span>
+              </div>
+            </div>
+
+            {est.omiCheck && (
+              <div style={{ fontSize: 12.5, color: c.inkSoft, marginTop: 14 }}>
+                {est.omiCheck.n > 0 ? (
+                  <>
+                    Controllo con valore zona: i tuoi progetti hanno venduto in media al{" "}
+                    <b>{(est.omiCheck.ratio * 100).toFixed(0)}%</b> del valore OMI, che qui darebbe circa{" "}
+                    <b>{eur(est.omiCheck.priceFromOmi)}/mq</b> contro {eur(est.price.mid)}/mq della stima sopra
+                    ({est.price.mid > 0 ? (((est.omiCheck.priceFromOmi - est.price.mid) / est.price.mid) * 100).toFixed(0) : 0}% di differenza).
+                  </>
+                ) : (
+                  <>Per attivare il controllo con il valore zona, compila “Valore zona OMI” anche nelle schede dei progetti passati.</>
+                )}
+              </div>
+            )}
+
+            <div style={{ marginTop: 22 }}>
+              <div style={{ ...styles.eyebrowSmall, marginBottom: 10 }}>Se cambia il prezzo di acquisto</div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 560 }}>
+                  <thead>
+                    <tr style={{ ...styles.tableHeaderRow, display: "table-row" }}>
+                      <th style={th}>Acquisto</th>
+                      <th style={{ ...th, textAlign: "right" }}>ROI prudente</th>
+                      <th style={{ ...th, textAlign: "right" }}>ROI atteso</th>
+                      <th style={{ ...th, textAlign: "right" }}>ROI ottimista</th>
+                      <th style={{ ...th, textAlign: "right" }}>Utile atteso</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {est.sensitivity.map((r) => (
+                      <tr key={r.dp} style={r.dp === 0 ? { background: c.surfaceAlt } : undefined}>
+                        <td style={td}>
+                          {eur(r.acq)} <span style={{ color: c.inkFaint, fontSize: 11 }}>{r.dp === 0 ? "base" : `${r.dp > 0 ? "+" : ""}${r.dp}%`}</span>
+                        </td>
+                        <td style={{ ...num, color: roiColor(r.prudente.roi) }}>{pct(r.prudente.roi)}</td>
+                        <td style={{ ...num, color: roiColor(r.atteso.roi) }}>{pct(r.atteso.roi)}</td>
+                        <td style={{ ...num, color: roiColor(r.ottimista.roi) }}>{pct(r.ottimista.roi)}</td>
+                        <td style={num}>{eur(r.atteso.utile)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 18, padding: "12px 14px", borderRadius: 10, border: `1px solid ${c.border}`, fontSize: 12.5, color: c.inkSoft, lineHeight: 1.5 }}>
+              <b style={{ color: c.ink }}>
+                Affidabilità {est.n >= 8 && est.concl >= 8 ? "buona" : est.n >= 3 ? "media" : "bassa"} · basata su {est.n}{" "}
+                {est.n === 1 ? "progetto" : "progetti"} ({est.concl} conclusi)
+              </b>
+              {est.warnings.map((w, i) => (
+                <div key={i} style={{ marginTop: 4 }}>• {w}</div>
+              ))}
+              <div style={{ marginTop: 4 }}>
+                • Le fasce sono le medie dei progetti simili con almeno ±15%. Non sono previsioni statistiche: cambiano man mano che aggiungi progetti.
+              </div>
+            </div>
+          </>
+        )}
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 20, flexWrap: "wrap" }}>
+          <button style={styles.addRowBtn} onClick={saveOpp}>
+            {d.id ? "Aggiorna opportunità salvata" : "Salva questa opportunità"}
+          </button>
+          {d.id && (
+            <button style={styles.addProjectBtn} onClick={() => setD(newDraft())}>Nuova valutazione</button>
+          )}
+          <span style={{ fontSize: 12.5, color: c.inkSoft }}>{saveMsg}</span>
+        </div>
+      </section>
+
+      <section style={styles.section} className="section-card no-print">
+        <div style={styles.sectionHeadRow}>
+          <div style={styles.eyebrowSmall}>Archivio opportunità valutate</div>
+        </div>
+        {loadFailed && (
+          <div style={{ fontSize: 12.5, color: c.red, marginBottom: 10 }}>
+            Archivio non raggiungibile in questo momento: ricarica la pagina.
+          </div>
+        )}
+        {(!opps || opps.length === 0) && (
+          <div style={styles.tableEmpty}>
+            Nessuna opportunità salvata. Salva anche quelle che scarti: tra qualche mese saranno il tuo storico dei prezzi di zona.
+          </div>
+        )}
+        {opps && opps.length > 0 && (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 800 }}>
+              <thead>
+                <tr style={{ ...styles.tableHeaderRow, display: "table-row" }}>
+                  <th style={th}>Opportunità</th>
+                  <th style={th}>Comune</th>
+                  <th style={{ ...th, textAlign: "right" }}>Mq</th>
+                  <th style={{ ...th, textAlign: "right" }}>Acquisto</th>
+                  <th style={{ ...th, textAlign: "right" }}>€/mq</th>
+                  <th style={{ ...th, textAlign: "right" }}>ROI atteso*</th>
+                  <th style={th}>Giudizio*</th>
+                  <th style={th}>Esito</th>
+                  <th style={th} />
+                </tr>
+              </thead>
+              <tbody>
+                {opps.map((o) => (
+                  <tr key={o.id}>
+                    <td style={td}>{o.nome || "Senza nome"}</td>
+                    <td style={td}>{o.comune || "—"}</td>
+                    <td style={num}>{o.mq || "—"}</td>
+                    <td style={num}>{o.prezzo ? eur(o.prezzo) : "—"}</td>
+                    <td style={num}>{o.mq > 0 && o.prezzo > 0 ? eur(o.prezzo / o.mq) : "—"}</td>
+                    <td style={num}>{o.roiAtteso == null ? "—" : pct(o.roiAtteso)}</td>
+                    <td style={td}>{o.verdetto || "—"}</td>
+                    <td style={td}>
+                      <select
+                        style={{ ...styles.select, padding: "6px 8px" }}
+                        value={o.esito || "valutata"}
+                        onChange={(e) => persist(opps.map((x) => (x.id === o.id ? { ...x, esito: e.target.value } : x)))}
+                      >
+                        {ESITI.map((e) => (
+                          <option key={e.v} value={e.v}>{e.label}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={{ ...td, textAlign: "right" }}>
+                      <button
+                        style={{ background: "none", border: "none", color: c.teal, cursor: "pointer", fontSize: 13, marginRight: 10 }}
+                        onClick={() => {
+                          setD({ ...newDraft(), ...o });
+                          window.scrollTo({ top: 0, behavior: "smooth" });
+                        }}
+                      >
+                        Riapri
+                      </button>
+                      <button
+                        style={{ background: "none", border: "none", color: c.red, cursor: "pointer", fontSize: 16 }}
+                        aria-label="Elimina"
+                        onClick={() => {
+                          if (window.confirm("Eliminare questa opportunità dall’archivio?")) persist(opps.filter((x) => x.id !== o.id));
+                        }}
+                      >
+                        ×
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div style={{ fontSize: 12, color: c.inkFaint, marginTop: 12 }}>
+          * ROI e giudizio sono quelli calcolati al momento del salvataggio, con lo storico di allora. “Riapri” li ricalcola con i dati attuali.
         </div>
       </section>
     </>
