@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from "recharts";
 import jsPDF from "jspdf";
 import { kvGet, kvSet } from "./supabaseClient";
+import { ScoutingCard, ScoutingPage, ViewSwitch } from "./Scouting";
 
 // ---------- helpers ----------
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -757,6 +758,7 @@ const STORAGE_KEY = "gruppo-endine:projects";
 export default function Dashboard() {
   const [projects, setProjects] = useState(null);
   const [activeId, setActiveId] = useState(null);
+  const [view, setView] = useState("projects");
   const [status, setStatus] = useState("loading");
   const [saveState, setSaveState] = useState("idle");
   const [reportStatus, setReportStatus] = useState("idle");
@@ -857,6 +859,10 @@ export default function Dashboard() {
   }
 
   const metrics = active ? computeProject(active) : null;
+  const ui = {
+  styles, eur, pct, computeProject, NumberField,
+  colors: { teal, red, green, amber, ink, inkSoft, inkFaint, border, surfaceAlt },
+};
 
   return (
     <div style={styles.page}>
@@ -927,8 +933,19 @@ export default function Dashboard() {
           <div>{active ? active.name : ""} — generato il {new Date().toLocaleString("it-IT")}</div>
         </div>
 
+        <ViewSwitch view={view} setView={setView} ui={ui} />
+{view === "scouting" && (
+  <ScoutingPage
+    projects={projects}
+    ui={ui}
+    onOpenProject={(id) => {
+      setActiveId(id);
+      setView("projects");
+    }}
+  />
+)}
         <ProjectTabs
-          className="no-print"
+          className={view === "projects" ? "no-print" : "no-print hidden-view"}
           projects={projects}
           activeId={activeId}
           setActiveId={setActiveId}
@@ -958,7 +975,7 @@ export default function Dashboard() {
           }}
         />
 
-        {active && metrics && (
+        {view === "projects" && active && metrics && (
           <>
             <ProjectHeader project={active} onChange={updateActive} />
             <Ledger metrics={metrics} project={active} onChange={updateActive} />
@@ -967,6 +984,7 @@ export default function Dashboard() {
             <CostPieSection project={active} onChange={updateActive} metrics={metrics} />
             <UnitsSection project={active} onChange={updateActive} metrics={metrics} />
             <ExtraRevenueSection project={active} onChange={updateActive} metrics={metrics} />
+            <ScoutingCard project={active} onChange={updateActive} ui={ui} />
             <NotesSection project={active} onChange={updateActive} />
             <AppuntiSection project={active} onChange={updateActive} />
           </>
