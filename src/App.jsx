@@ -3,6 +3,8 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import jsPDF from "jspdf";
 import { kvGet, kvSet } from "./supabaseClient";
 import { ScoutingCard, ScoutingPage, ViewSwitch } from "./Scouting";
+import logoScuro from "./logo-su-scuro.png";
+import logoChiaro from "./logo-su-chiaro.png";
 
 // ---------- helpers ----------
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -190,7 +192,7 @@ function buildReportHtml(project, metrics) {
   const inkC = "#EDF1F7";
   const inkSoftC = "#8A93A8";
   const inkFaintC = "#5C6478";
-  const tealC = "#2FD9C4";
+  const tealC = "#D49A63";
   const amberC = "#F0B429";
   const greenC = "#3ECF8E";
   const redC = "#F2555F";
@@ -372,12 +374,28 @@ function pieToDataUrl(slices, colors, size) {
   return canvas.toDataURL("image/png");
 }
 
+// Carica un'immagine (es. il logo) e la restituisce come PNG per il PDF
+async function loadImageDataUrl(src) {
+  try {
+    const img = new Image();
+    img.src = src;
+    await img.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    canvas.getContext("2d").drawImage(img, 0, 0);
+    return { url: canvas.toDataURL("image/png"), w: img.naturalWidth, h: img.naturalHeight };
+  } catch (e) {
+    return null;
+  }
+}
+
 function hexRgb(hex) {
   const h = hex.replace("#", "");
   return [parseInt(h.substring(0, 2), 16), parseInt(h.substring(2, 4), 16), parseInt(h.substring(4, 6), 16)];
 }
 
-function generatePdfReport(doc, project, metrics) {
+function generatePdfReport(doc, project, metrics, logo) {
   const marginX = 46;
   const marginTop = 54;
   const marginBottom = 56;
@@ -386,13 +404,14 @@ function generatePdfReport(doc, project, metrics) {
   const pageHeight = doc.internal.pageSize.getHeight();
   const contentWidth = pageWidth - marginX * 2;
 
-  const tealC = hexRgb("#1B9E8F");
-  const amberC = hexRgb("#C98A1B");
-  const greenC = hexRgb("#1F9D5C");
-  const redC = hexRgb("#C43A45");
-  const grayC = [110, 116, 128];
-  const lightGrayC = [225, 225, 225];
-  const darkC = [26, 31, 42];
+  // palette "chiara come il logo": rame, antracite, grigi caldi
+  const tealC = hexRgb("#8A5222"); // rame (accento)
+  const amberC = hexRgb("#2A78D6"); // finanziamento (blu)
+  const greenC = hexRgb("#176A48");
+  const redC = hexRgb("#B8323C");
+  const grayC = [91, 99, 102]; // antracite chiaro
+  const lightGrayC = [225, 218, 208]; // linee calde
+  const darkC = [56, 64, 64]; // antracite del logo
 
   const newPage = () => {
     doc.addPage();
@@ -439,8 +458,8 @@ function generatePdfReport(doc, project, metrics) {
       doc.setFontSize(8);
       doc.setTextColor(...grayC);
       doc.text(it.label.toUpperCase(), x, y);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(16);
+      doc.setFont("times", "bold");
+      doc.setFontSize(18);
       doc.setTextColor(...(it.color || darkC));
       doc.text(it.value, x, y + 18);
       doc.setFont("helvetica", "normal");
@@ -481,16 +500,22 @@ function generatePdfReport(doc, project, metrics) {
     y = chartTop + blockHeight;
   };
 
+  // logo in alto a destra
+  if (logo) {
+    const logoH = 48;
+    const logoW = (logo.w / logo.h) * logoH;
+    doc.addImage(logo.url, "PNG", pageWidth - marginX - logoW, marginTop - 24, logoW, logoH);
+  }
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9);
   doc.setTextColor(...tealC);
   doc.text("GRUPPO ENDINE SVILUPPO", marginX, y);
-  y += 20;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(21);
+  y += 22;
+  doc.setFont("times", "bold");
+  doc.setFontSize(24);
   doc.setTextColor(...darkC);
   doc.text("Conto economico di progetto", marginX, y);
-  y += 17;
+  y += 18;
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
   doc.setTextColor(...grayC);
@@ -499,7 +524,12 @@ function generatePdfReport(doc, project, metrics) {
     marginX,
     y
   );
-  y += 30;
+  y += 14;
+  doc.setDrawColor(...tealC);
+  doc.setLineWidth(1);
+  doc.line(marginX, y, pageWidth - marginX, y);
+  doc.setLineWidth(0.2);
+  y += 28;
 
   startSection(260);
   sectionTitle(`Risultato economico · durata ${metrics.durationMonths} mesi`);
@@ -869,9 +899,12 @@ export default function Dashboard() {
       <Fonts />
       <div style={styles.container}>
         <header style={styles.header} className="no-print">
-          <div>
-            <div style={styles.eyebrow}>Gruppo Endine Sviluppo</div>
-            <h1 style={styles.title}>Conto economico di progetto</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: 22, flexWrap: "wrap" }}>
+            <img src={logoScuro} alt="Endine Sviluppo Holding" style={{ height: 62, width: "auto", display: "block" }} />
+            <div>
+              <div style={styles.eyebrow}>Gruppo Endine Sviluppo</div>
+              <h1 style={styles.title}>Conto economico di progetto</h1>
+            </div>
           </div>
           <div style={styles.headerRight}>
             <div style={{ ...styles.saveIndicator, ...(saveState === "error" ? { color: red } : {}) }}>
@@ -893,7 +926,8 @@ export default function Dashboard() {
                 setReportStatus("generating");
                 try {
                   const doc = new jsPDF({ unit: "pt", format: "a4" });
-                  generatePdfReport(doc, active, metrics);
+                  const logoImg = await loadImageDataUrl(logoChiaro);
+                  generatePdfReport(doc, active, metrics, logoImg);
                   const pdfBlob = doc.output("blob");
                   const pdfUrl = URL.createObjectURL(pdfBlob);
                   const pdfLink = document.createElement("a");
@@ -1007,7 +1041,7 @@ function Fonts() {
       input[type="number"]::-webkit-outer-spin-button,
       input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
       input[type="number"] { -moz-appearance: textfield; }
-      ::selection { background: #2F6F6333; }
+      ::selection { background: #8A5A2E55; }
       .print-only { display: none; }
       @media print {
         * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
@@ -1444,7 +1478,6 @@ function CostsSection({ project, onChange, metrics }) {
           <div>Categoria</div>
           <div>Descrizione</div>
           <div>Importo</div>
-          <div style={{ textAlign: "center" }}>Venduto</div>
           <div style={{ textAlign: "center" }}>Finale</div>
           <div />
         </div>
@@ -1696,6 +1729,7 @@ function ExtraRevenueSection({ project, onChange, metrics }) {
         <div style={{ ...styles.tableHeaderRow, gridTemplateColumns: "2fr 1fr 70px 40px" }}>
           <div>Voce</div>
           <div style={{ textAlign: "right" }}>Importo</div>
+          <div style={{ textAlign: "center" }}>Venduto</div>
           <div />
         </div>
         {rows.map((r) => (
@@ -1841,8 +1875,8 @@ const border = "#242D3F";
 const ink = "#EDF1F7";
 const inkSoft = "#8A93A8";
 const inkFaint = "#5C6478";
-const teal = "#2FD9C4";
-const tealDim = "#1B4B47";
+const teal = "#D49A63"; // accento rame (dal logo)
+const tealDim = "#4A3320";
 const green = "#3ECF8E";
 const red = "#F2555F";
 const amber = "#F0B429";
@@ -1925,7 +1959,7 @@ const styles = {
     borderRadius: 999,
     border: `1px solid ${teal}`,
     background: teal,
-    color: "#06110F",
+    color: "#1E1409",
     cursor: "pointer",
   },
   printHeader: {
@@ -1956,7 +1990,7 @@ const styles = {
     color: inkSoft,
     cursor: "pointer",
   },
-  tabActive: { background: teal, color: "#06110F", border: `1px solid ${teal}` },
+  tabActive: { background: teal, color: "#1E1409", border: `1px solid ${teal}` },
   addProjectBtn: {
     fontFamily: "'Inter', sans-serif",
     fontSize: 13,
