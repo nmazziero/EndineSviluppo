@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { kvGet, kvSet } from "./supabaseClient";
+import { FinancingPage } from "./Finanziamenti";
 
 // ---------------------------------------------------------------
 // SCOUTING — scheda per progetto + pagina di confronto
@@ -296,22 +297,26 @@ export function ScoutingCard({ project, onChange, ui }) {
 export function ViewSwitch({ view, setView, ui }) {
   const { styles } = ui;
   return (
-    <div className="no-print" style={{ display: "flex", gap: 8, marginBottom: 18 }}>
-      {/* regola usata per nascondere le linguette dei progetti nella vista Scouting */}
-      <style>{`.hidden-view { display: none !important; }`}</style>
-      {[
-        { v: "projects", label: "Progetti" },
-        { v: "scouting", label: "Scouting" },
-      ].map((t) => (
-        <button
-          key={t.v}
-          onClick={() => setView(t.v)}
-          style={{ ...styles.tab, ...(view === t.v ? styles.tabActive : {}) }}
-        >
-          {t.label}
-        </button>
-      ))}
-    </div>
+    <>
+      <div className="no-print" style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+        {/* regola usata per nascondere le linguette dei progetti nelle altre viste */}
+        <style>{`.hidden-view { display: none !important; }`}</style>
+        {[
+          { v: "projects", label: "Progetti" },
+          { v: "scouting", label: "Scouting" },
+          { v: "finanziamenti", label: "Finanziamenti" },
+        ].map((t) => (
+          <button
+            key={t.v}
+            onClick={() => setView(t.v)}
+            style={{ ...styles.tab, ...(view === t.v ? styles.tabActive : {}) }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {view === "finanziamenti" && <FinancingPage ui={ui} />}
+    </>
   );
 }
 
