@@ -47,6 +47,74 @@ const newLoan = () => ({
   ammTipo: "francese",
 });
 
+// ---------- esportazione in Excel (.xlsx) senza librerie esterne ----------
+const CRC_TABLE = (() => {
+  const t = [];
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+// zip "senza compressione": basta per un file xlsx
+function zipStore(files) {
+  const enc = new TextEncoder();
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  const u16 = (v) => [v & 255, (v >>> 8) & 255];
+  const u32 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+  files.forEach((f) => {
+    const name = enc.encode(f.name);
+    const data = enc.encode(f.content);
+    const crc = crc32(data);
+    const local = [0x50, 0x4b, 3, 4, ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(name.length), ...u16(0)];
+    parts.push(new Uint8Array(local), name, data);
+    central.push(new Uint8Array([0x50, 0x4b, 1, 2, ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(name.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset)]), name);
+    offset += local.length + name.length + data.length;
+  });
+  const centralSize = central.reduce((t, p) => t + p.length, 0);
+  const end = new Uint8Array([0x50, 0x4b, 5, 6, ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(centralSize), ...u32(offset), ...u16(0)]);
+  return new Blob([...parts, ...central, end], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+const xmlEsc = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const colName = (i) => String.fromCharCode(65 + i);
+// rows: array di array; cella = testo, numero oppure { v, bold }
+function buildXlsx(rows, widths, sheetName) {
+  const sheetRows = rows
+    .map((r, ri) => {
+      const cells = r
+        .map((cell, ci) => {
+          const obj = cell !== null && typeof cell === "object" ? cell : { v: cell };
+          const ref = colName(ci) + (ri + 1);
+          const isNum = typeof obj.v === "number";
+          const style = obj.bold ? (isNum ? 3 : 1) : isNum ? 2 : 0;
+          if (obj.v === "" || obj.v === null || obj.v === undefined) return `<c r="${ref}" s="${style}"/>`;
+          if (isNum) return `<c r="${ref}" s="${style}"><v>${obj.v}</v></c>`;
+          return `<c r="${ref}" s="${style}" t="inlineStr"><is><t>${xmlEsc(obj.v)}</t></is></c>`;
+        })
+        .join("");
+      return `<row r="${ri + 1}">${cells}</row>`;
+    })
+    .join("");
+  const cols = widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("");
+  const X = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  return zipStore([
+    { name: "[Content_Types].xml", content: X + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>' },
+    { name: "_rels/.rels", content: X + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
+    { name: "xl/workbook.xml", content: X + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEsc(sheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>` },
+    { name: "xl/_rels/workbook.xml.rels", content: X + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>' },
+    { name: "xl/styles.xml", content: X + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00;[Red]\-#,##0.00"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="164" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>' },
+    { name: "xl/worksheets/sheet1.xml", content: X + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${cols}</cols><sheetData>${sheetRows}</sheetData></worksheet>` },
+  ]);
+}
+
 // ---------- piano di ammortamento di un finanziamento ----------
 export function buildSchedule(loan, stress = 0) {
   const P = Number(loan.importo) || 0;
@@ -254,6 +322,27 @@ export function FinancingPage({ ui }) {
     row.balance = m.balance; // ultimo mese dell'anno
   });
 
+  const downloadXlsx = () => {
+    const sum = (k) => months.reduce((t, m) => t + m[k], 0);
+    const r2 = (n) => Math.round(n * 100) / 100;
+    const head = ["Mese", "Erogato (entrata)", "Interessi", "Capitale", "Costi entrata", "Uscite totali", "Cash flow netto", "Debito residuo"].map((v) => ({ v, bold: true }));
+    const body = months.map((m) => {
+      const out = m.interest + m.capital + m.fee;
+      return [m.label, r2(m.inflow), r2(m.interest), r2(m.capital), r2(m.fee), r2(out), r2(m.inflow - out), r2(m.balance)];
+    });
+    const totOut = sum("interest") + sum("capital") + sum("fee");
+    const total = ["Totale", r2(sum("inflow")), r2(sum("interest")), r2(sum("capital")), r2(sum("fee")), r2(totOut), r2(sum("inflow") - totOut), ""].map((v) => ({ v, bold: true }));
+    const blob = buildXlsx([head, ...body, total], [12, 18, 14, 14, 14, 14, 16, 16], "Cash flow mensile");
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "cash-flow-finanziamenti.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
   const th = { padding: "0 10px 8px", textAlign: "right", fontWeight: 500, whiteSpace: "nowrap" };
   const td = { padding: "9px 10px", borderTop: `1px solid ${c.border}`, whiteSpace: "nowrap", fontSize: 13, color: c.ink, textAlign: "right", fontFamily: "'JetBrains Mono', monospace" };
 
@@ -457,7 +546,7 @@ export function FinancingPage({ ui }) {
             </ResponsiveContainer>
           </div>
 
-          <div style={{ marginTop: 16, display: "flex", justifyContent: "center" }}>
+          <div style={{ marginTop: 16, display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
             <button
               type="button"
               style={styles.saveNowBtn}
@@ -465,6 +554,9 @@ export function FinancingPage({ ui }) {
               aria-expanded={showMonthly}
             >
               {showMonthly ? "▲ Nascondi cash flow mensile" : "▼ Mostra cash flow mensile"}
+            </button>
+            <button type="button" style={styles.saveNowBtn} onClick={downloadXlsx}>
+              ⬇ Scarica Excel
             </button>
           </div>
 
