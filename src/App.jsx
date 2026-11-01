@@ -1411,8 +1411,8 @@ function CostsSection({ project, onChange, metrics }) {
     setOverId(null);
   };
 
-  const COST_COLS = "20px 1.1fr 1.4fr 1.9fr 32px";
-
+  const COST_COLS = "20px 1.1fr 1.4fr 1.9fr 56px 32px";
+  
   return (
     <section style={styles.section} className="section-card">
       <div style={styles.sectionHeadRow}>
@@ -1426,6 +1426,7 @@ function CostsSection({ project, onChange, metrics }) {
           <div>Categoria</div>
           <div>Descrizione</div>
           <div>Importo</div>
+          <div style={{ textAlign: "center" }}>Finale</div>
           <div />
         </div>
                 {project.costs.map((c) => {
@@ -1504,6 +1505,13 @@ function CostsSection({ project, onChange, metrics }) {
                   {metrics.totalCosts > 0 ? pct(((Number(c.amount) || 0) / metrics.totalCosts) * 100) : "—"}
                 </span>
               </div>
+              <label style={styles.checkboxWrap} title="Spunta quando il costo è definitivo (fattura/consuntivo). Senza spunta è un preventivo.">
+  <input
+    type="checkbox"
+    checked={!!c.final}
+    onChange={(e) => updateRow(c.id, "final", e.target.checked)}
+  />
+</label>
               <button style={styles.rowDeleteBtn} className="no-print" onClick={() => removeRow(c.id)} aria-label="Elimina riga">×</button>
             </div>
           );
@@ -1517,6 +1525,14 @@ function CostsSection({ project, onChange, metrics }) {
         <span>Totale costi</span>
         <span style={styles.totalLineValue}>{eur(metrics.totalCosts)}</span>
       </div>
+      {(() => {
+  const finalAmt = project.costs.filter((c) => c.final).reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  return (
+    <div style={{ fontSize: 12, opacity: 0.65, marginTop: 8, textAlign: "right" }}>
+      Costi definitivi: {eur(finalAmt)} ({metrics.totalCosts > 0 ? pct((finalAmt / metrics.totalCosts) * 100) : "—"}) · il resto è preventivo
+    </div>
+  );
+})()}
     </section>
   );
 }
@@ -1549,17 +1565,18 @@ function UnitsSection({ project, onChange, metrics }) {
       </div>
 
       <div style={styles.tableWrap}>
-        <div style={{ ...styles.tableHeaderRow, gridTemplateColumns: "1.1fr 0.6fr 0.7fr 0.6fr 0.6fr 1fr 40px" }}>
+        <div style={{ ...styles.tableHeaderRow, gridTemplateColumns: "1.1fr 0.6fr 0.7fr 0.6fr 0.6fr 1fr 0.7fr 40px" }}>
           <div>Unità</div>
           <div>Piano</div>
           <div>Mq</div>
           <div>Giardino</div>
           <div>Terrazzo</div>
           <div style={{ textAlign: "right" }}>Prezzo previsto</div>
+          <div style={{ textAlign: "center" }}>Venduto</div>
           <div />
         </div>
         {project.units.map((u) => (
-          <div key={u.id} style={{ ...styles.tableRow, gridTemplateColumns: "1.1fr 0.6fr 0.7fr 0.6fr 0.6fr 1fr 40px" }}>
+          <div key={u.id} style={{ ...styles.tableRow, gridTemplateColumns: "1.1fr 0.6fr 0.7fr 0.6fr 0.6fr 1fr 0.7fr 40px" }}>
             <input style={styles.input} value={u.label} onChange={(e) => updateRow(u.id, "label", e.target.value)} />
             <input style={styles.input} value={u.floor} onChange={(e) => updateRow(u.id, "floor", e.target.value)} />
             <NumberField style={styles.input} value={u.sqm} onChange={(v) => updateRow(u.id, "sqm", v)} />
@@ -1582,6 +1599,13 @@ function UnitsSection({ project, onChange, metrics }) {
               value={u.price}
               onChange={(v) => updateRow(u.id, "price", v)}
             />
+            <label style={styles.checkboxWrap} title="Spunta quando l'unità è venduta (il prezzo diventa quello reale). Senza spunta è rimanenza.">
+  <input
+    type="checkbox"
+    checked={!!u.sold}
+    onChange={(e) => updateRow(u.id, "sold", e.target.checked)}
+  />
+</label>
             <button style={styles.rowDeleteBtn} className="no-print" onClick={() => removeRow(u.id)} aria-label="Elimina riga">×</button>
           </div>
         ))}
@@ -1599,6 +1623,18 @@ function UnitsSection({ project, onChange, metrics }) {
           <span style={styles.chipLabel}>Mq totali</span>
           <span style={styles.chipValue}>{metrics.totalSqm}</span>
         </div>
+        <div style={styles.chip}>
+  <span style={styles.chipLabel}>Vendute / rimanenze</span>
+  <span style={styles.chipValue}>
+    {project.units.filter((u) => u.sold).length} / {project.units.filter((u) => !u.sold).length}
+  </span>
+</div>
+<div style={styles.chip}>
+  <span style={styles.chipLabel}>Venduto (reale)</span>
+  <span style={styles.chipValue}>
+    {eur(project.units.filter((u) => u.sold).reduce((s, u) => s + (Number(u.price) || 0), 0))}
+  </span>
+</div>
         <div style={{ ...styles.chip, ...styles.chipTotal }}>
           <span style={styles.chipLabel}>Prezzo medio / mq</span>
           <span style={styles.chipValue}>{eur(metrics.avgPricePerSqm)}</span>
