@@ -167,6 +167,7 @@ export function FinancingPage({ ui }) {
   const [loadFailed, setLoadFailed] = useState(false);
   const [saveState, setSaveState] = useState("idle");
   const [stress, setStress] = useState(0);
+  const [showMonthly, setShowMonthly] = useState(false);
   const timer = useRef(null);
   const latest = useRef(null);
   const failedRef = useRef(false);
@@ -455,6 +456,60 @@ export function FinancingPage({ ui }) {
               </ComposedChart>
             </ResponsiveContainer>
           </div>
+
+          <div style={{ marginTop: 16, display: "flex", justifyContent: "center" }}>
+            <button
+              type="button"
+              style={styles.saveNowBtn}
+              onClick={() => setShowMonthly((v) => !v)}
+              aria-expanded={showMonthly}
+            >
+              {showMonthly ? "▲ Nascondi cash flow mensile" : "▼ Mostra cash flow mensile"}
+            </button>
+          </div>
+
+          {showMonthly && (
+            <div style={{ marginTop: 16, overflowX: "auto", maxHeight: 460, overflowY: "auto", border: `1px solid ${c.border}`, borderRadius: 10 }}>
+              <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 760 }}>
+                <thead>
+                  <tr style={{ ...styles.tableHeaderRow, display: "table-row" }}>
+                    {["Mese", "Erogato (entrata)", "Interessi", "Capitale", "Costi entrata", "Uscite totali", "Cash flow netto", "Debito residuo"].map((h, i) => (
+                      <th key={h} style={{ ...th, padding: "10px 10px", position: "sticky", top: 0, background: c.surface, textAlign: i === 0 ? "left" : "right" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {months.map((m) => {
+                    const out = m.interest + m.capital + m.fee;
+                    const net = m.inflow - out;
+                    const isNow = m.idx === curIdx;
+                    return (
+                      <tr key={m.idx} style={isNow ? { background: c.surfaceAlt } : undefined}>
+                        <td style={{ ...td, textAlign: "left" }}>{m.label}{isNow ? " · oggi" : ""}</td>
+                        <td style={{ ...td, color: m.inflow > 0 ? c.green : c.inkFaint }}>{m.inflow > 0 ? eur(m.inflow) : "—"}</td>
+                        <td style={td}>{m.interest > 0 ? eur(m.interest) : "—"}</td>
+                        <td style={td}>{m.capital > 0 ? eur(m.capital) : "—"}</td>
+                        <td style={td}>{m.fee > 0 ? eur(m.fee) : "—"}</td>
+                        <td style={{ ...td, fontWeight: 700 }}>{out > 0 ? eur(out) : "—"}</td>
+                        <td style={{ ...td, fontWeight: 700, color: net > 0 ? c.green : net < 0 ? c.red : c.inkFaint }}>{net === 0 ? "—" : (net > 0 ? "+" : "−") + eur(Math.abs(net))}</td>
+                        <td style={td}>{eur(m.balance)}</td>
+                      </tr>
+                    );
+                  })}
+                  <tr>
+                    <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>Totale</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{eur(totDraw)}</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{eur(totInterest)}</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{eur(months.reduce((t, m) => t + m.capital, 0))}</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{eur(totFees)}</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{eur(totInterest + totFees + months.reduce((t, m) => t + m.capital, 0))}</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{(() => { const n = totDraw - (totInterest + totFees + months.reduce((t, m) => t + m.capital, 0)); return n === 0 ? "—" : (n > 0 ? "+" : "−") + eur(Math.abs(n)); })()}</td>
+                    <td style={td}>—</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
 
           <div style={{ marginTop: 22, overflowX: "auto" }}>
             <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 640 }}>
