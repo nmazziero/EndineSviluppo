@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { kvGet, kvSet } from "./supabaseClient";
 import { FinancingPage } from "./Finanziamenti";
+import { TreasuryPage } from "./Tesoreria";
 
 // ---------------------------------------------------------------
 // SCOUTING — scheda per progetto + pagina di confronto
@@ -316,6 +317,7 @@ export function ViewSwitch({ view, setView, ui }) {
           { v: "projects", label: "Progetti" },
           { v: "scouting", label: "Scouting" },
           { v: "finanziamenti", label: "Finanziamenti" },
+          { v: "tesoreria", label: "Tesoreria" },
         ].map((t) => (
           <button
             key={t.v}
@@ -329,6 +331,7 @@ export function ViewSwitch({ view, setView, ui }) {
         ))}
       </div>
       {view === "finanziamenti" && <FinancingPage ui={ui} />}
+      {view === "tesoreria" && <TreasuryPage ui={ui} />}
     </>
   );
 }
