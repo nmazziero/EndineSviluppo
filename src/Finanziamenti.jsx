@@ -118,8 +118,17 @@ function buildXlsx(rows, widths, sheetName) {
 // ---------- piano di ammortamento di un finanziamento ----------
 export function buildSchedule(loan, stress = 0) {
   const P = Number(loan.importo) || 0;
-  const rate = (Number(loan.tasso) || 0) + (loan.tipoTasso === "variabile" ? stress : 0);
-  const r = rate / 100 / 12;
+  // tasso del mese: quello di partenza, poi l'ultima variazione con data <= al mese (solo tasso variabile)
+  const isVar = loan.tipoTasso === "variabile";
+  const vars = (loan.tassoVar || [])
+    .filter((v) => v.da && v.tasso !== "" && v.tasso != null)
+    .map((v) => ({ idx: toIdx(v.da), tasso: Number(v.tasso) || 0 }))
+    .sort((a, b) => a.idx - b.idx);
+  const rateAt = (i) => {
+    let x = Number(loan.tasso) || 0;
+    if (isVar) vars.forEach((v) => { if (v.idx <= i) x = v.tasso; });
+    return x + (isVar ? stress : 0);
+  };
   const pre = Math.max(0, Math.round(Number(loan.preMesi) || 0));
   const n = Math.max(0, Math.round(Number(loan.ammMesi) || 0));
   const start = toIdx(loan.inizio);
@@ -130,15 +139,20 @@ export function buildSchedule(loan, stress = 0) {
   let regime = 0;
   let preRata = 0;
   if (P > 0 && pre + n > 0) {
-    const pay = loan.ammTipo === "francese" && n > 0 ? (r === 0 ? P / n : (P * r) / (1 - Math.pow(1 + r, -n))) : 0;
     let bal = P;
-    preRata = P * r;
+    preRata = (P * rateAt(start + 1)) / 100 / 12;
     for (let t = 1; t <= pre + n; t++) {
+      const r = rateAt(start + t) / 100 / 12;
       const interest = bal * r;
       let capital = 0;
       if (t > pre && n > 0) {
         const k = t - pre;
-        if (loan.ammTipo === "francese") capital = pay - interest;
+        if (loan.ammTipo === "francese") {
+          // rata ricalcolata ogni mese sul capitale residuo e sui mesi che restano (con tasso costante dà la rata fissa)
+          const m = pre + n - t + 1;
+          const pay = r === 0 ? bal / m : (bal * r) / (1 - Math.pow(1 + r, -m));
+          capital = pay - interest;
+        }
         else if (loan.ammTipo === "italiano") capital = P / n;
         else capital = k === n ? bal : 0;
         if (k === 1) regime = interest + capital;
@@ -418,7 +432,7 @@ export function FinancingPage({ ui }) {
                     <option value="variabile">Variabile</option>
                   </select>
                 </Field>
-                <Field ui={ui} label={l.tipoTasso === "variabile" ? "Tasso annuo attuale (%)" : "Tasso annuo (%)"}>
+                <Field ui={ui} label={l.tipoTasso === "variabile" ? "Tasso annuo di partenza (%)" : "Tasso annuo (%)"}>
                   <RateField style={styles.input} value={l.tasso} onChange={(v) => update(l.id, { tasso: v })} />
                 </Field>
                 <Field ui={ui} label="Costo di entrata">
@@ -478,8 +492,43 @@ export function FinancingPage({ ui }) {
                 </div>
               )}
               {l.tipoTasso === "variabile" && (
-                <div style={{ fontSize: 12, color: c.inkFaint, marginTop: 10 }}>
-                  Il piano usa il tasso attuale come se restasse costante. Per vedere cosa succede se i tassi salgono usa lo “stress” nel riepilogo qui sotto.
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                    <span style={styles.chipLabel}>Variazioni di tasso</span>
+                    <button
+                      style={styles.addRowBtn}
+                      onClick={() => update(l.id, { tassoVar: [...(l.tassoVar || []), { id: Math.random().toString(36).slice(2, 8), da: nowYm(), tasso: l.tasso }] })}
+                    >
+                      + Variazione
+                    </button>
+                  </div>
+                  {(l.tassoVar || []).map((v) => (
+                    <div key={v.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+                      <span style={{ fontSize: 12.5, color: c.inkSoft }}>Dal mese</span>
+                      <input
+                        type="month"
+                        style={{ ...styles.input, colorScheme: "dark", width: 160 }}
+                        value={v.da}
+                        onChange={(e) => update(l.id, { tassoVar: l.tassoVar.map((x) => (x.id === v.id ? { ...x, da: e.target.value } : x)) })}
+                      />
+                      <span style={{ fontSize: 12.5, color: c.inkSoft }}>nuovo tasso annuo</span>
+                      <RateField
+                        style={{ ...styles.input, width: 90, textAlign: "right" }}
+                        value={v.tasso}
+                        onChange={(val) => update(l.id, { tassoVar: l.tassoVar.map((x) => (x.id === v.id ? { ...x, tasso: val } : x)) })}
+                      />
+                      <span style={{ fontSize: 12.5, color: c.inkSoft }}>%</span>
+                      <button
+                        style={{ background: "none", border: "none", color: c.red, cursor: "pointer", fontSize: 13 }}
+                        onClick={() => update(l.id, { tassoVar: l.tassoVar.filter((x) => x.id !== v.id) })}
+                      >
+                        Elimina
+                      </button>
+                    </div>
+                  ))}
+                  <div style={{ fontSize: 12, color: c.inkFaint, marginTop: 10, lineHeight: 1.5 }}>
+                    Il tasso di partenza vale fino alla prima variazione; ogni variazione vale dal mese indicato in poi, i mesi precedenti non cambiano. Con la rata costante (francese) la rata viene ricalcolata sul capitale residuo e sui mesi che restano. Per vedere cosa succede se i tassi salgono ancora usa lo “stress” nel riepilogo qui sotto.
+                  </div>
                 </div>
               )}
             </div>
