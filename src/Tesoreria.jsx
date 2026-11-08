@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
+import { ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { kvGet, kvSet } from "./supabaseClient";
 import { buildSchedule, buildXlsxMulti } from "./Finanziamenti";
 
@@ -465,6 +465,36 @@ export function TreasuryPage({ ui }) {
   const lastBal = [...fc.series].filter((p) => p.t <= endMs).pop();
   if (lastBal && lastBal.t < endMs) chartData.push({ t: endMs, bal: lastBal.bal, date: isoOf(new Date(endMs)) });
   const shownMoves = fc.moves.filter((m) => msOf(m.date) <= endMs);
+
+  // grafico ad area: ogni tratto prende il colore del suo stato (sopra soglia / sotto soglia / negativo)
+  const thr = filtering ? 0 : soglia;
+  const stateOf = (b) => (b < 0 ? "negV" : b < thr ? "warnV" : "okV");
+  const stepData = [];
+  const pushPt = (t, v, key) => stepData.push({ t, okV: null, warnV: null, negV: null, [key]: v });
+  for (let i = 0; i < chartData.length - 1; i++) {
+    const a = chartData[i];
+    const b = chartData[i + 1];
+    const st = stateOf(a.bal);
+    if (i > 0) pushPt(a.t, chartData[i - 1].bal, st); // inizio del salto verticale, nel colore del nuovo stato
+    pushPt(a.t, a.bal, st);
+    pushPt(b.t, a.bal, st);
+  }
+  if (stepData.length === 0 && chartData.length) pushPt(chartData[0].t, chartData[0].bal, stateOf(chartData[0].bal));
+  const balVals = chartData.map((p) => p.bal);
+  const yLo = Math.min(0, ...balVals);
+  const yHi = Math.max(thr, ...balVals, 1);
+  // asse verticale con valori tondi
+  const rough = Math.max(yHi - yLo, 1) / 5;
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const yStep = [1, 2, 5, 10].map((m) => m * mag).find((x) => x >= rough) || mag * 10;
+  const yDomain = [yLo < 0 ? Math.floor(yLo / yStep) * yStep : 0, Math.ceil(yHi / yStep) * yStep];
+  const yTicks = [];
+  for (let v = yDomain[0]; v <= yDomain[1] + 1e-6; v += yStep) yTicks.push(v);
+  const balanceAt = (t) => {
+    let v = fc.series[0].bal;
+    fc.series.forEach((p) => { if (p.t <= t) v = p.bal; });
+    return v;
+  };
   const dFmt = (t) => {
     const d = new Date(t);
     return `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${String(d.getUTCFullYear()).slice(2)}`;
@@ -761,22 +791,55 @@ export function TreasuryPage({ ui }) {
 
         <div style={{ height: 300, marginTop: 22 }}>
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={chartData} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
+            <ComposedChart data={stepData} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
+              <defs>
+                {[["gOk", c.teal], ["gWarn", c.amber], ["gNeg", c.red]].map(([id, col]) => (
+                  <linearGradient key={id} id={id} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={col} stopOpacity={0.55} />
+                    <stop offset="100%" stopColor={col} stopOpacity={0.04} />
+                  </linearGradient>
+                ))}
+              </defs>
               <CartesianGrid stroke={c.border} vertical={false} />
               <XAxis dataKey="t" type="number" scale="time" domain={[msOf(data.saldoDate), endMs]} tick={{ fill: c.inkSoft, fontSize: 11 }} stroke={c.border} tickFormatter={dFmt} tickCount={7} />
-              <YAxis tick={{ fill: c.inkSoft, fontSize: 11 }} stroke={c.border} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+              <YAxis type="number" domain={yDomain} ticks={yTicks} allowDataOverflow tick={{ fill: c.inkSoft, fontSize: 11 }} stroke={c.border} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
               <Tooltip
-                contentStyle={{ background: c.surfaceAlt, border: `1px solid ${c.border}`, borderRadius: 8, color: c.ink, fontSize: 12 }}
-                labelStyle={{ color: c.inkSoft }}
-                labelFormatter={(t) => dFmt(t)}
-                formatter={(v) => [eur(v), filtering ? "Cumulato" : "Saldo"]}
+                cursor={{ stroke: c.inkFaint, strokeDasharray: "3 3" }}
+                content={({ active, label }) => {
+                  if (!active || label == null) return null;
+                  const v = balanceAt(label);
+                  return (
+                    <div style={{ background: c.surfaceAlt, border: `1px solid ${c.border}`, borderRadius: 8, color: c.ink, fontSize: 12, padding: "8px 10px" }}>
+                      <div style={{ color: c.inkSoft }}>{dFmt(label)}</div>
+                      <div style={{ fontWeight: 700 }}>
+                        {filtering ? "Cumulato" : "Saldo"}: {eur(v)}
+                      </div>
+                    </div>
+                  );
+                }}
               />
               {!filtering && <ReferenceLine y={soglia} stroke={c.amber} strokeDasharray="5 4" label={{ value: "soglia", fill: c.amber, fontSize: 11, position: "insideTopRight" }} />}
               <ReferenceLine y={0} stroke={c.red} strokeDasharray="2 3" />
-              <Line type="stepAfter" dataKey="bal" name="Saldo" stroke={c.teal} strokeWidth={2.2} dot={false} isAnimationActive={false} />
+              <Area type="linear" dataKey="okV" baseValue={yDomain[0]} stroke="none" fill="url(#gOk)" isAnimationActive={false} connectNulls={false} />
+              <Area type="linear" dataKey="warnV" baseValue={yDomain[0]} stroke="none" fill="url(#gWarn)" isAnimationActive={false} connectNulls={false} />
+              <Area type="linear" dataKey="negV" baseValue={yDomain[0]} stroke="none" fill="url(#gNeg)" isAnimationActive={false} connectNulls={false} />
+              <Line type="linear" dataKey="okV" stroke={c.teal} strokeWidth={2.2} dot={false} isAnimationActive={false} connectNulls={false} />
+              <Line type="linear" dataKey="warnV" stroke={c.amber} strokeWidth={2.2} dot={false} isAnimationActive={false} connectNulls={false} />
+              <Line type="linear" dataKey="negV" stroke={c.red} strokeWidth={2.2} dot={false} isAnimationActive={false} connectNulls={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
+
+        {!filtering && (
+          <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 12, color: c.inkSoft, marginTop: 8, paddingLeft: 8 }}>
+            {[["Sopra la soglia", c.teal], ["Sotto la soglia", c.amber], ["Negativo", c.red]].map(([t, col]) => (
+              <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 3, background: col, display: "inline-block" }} />
+                {t}
+              </span>
+            ))}
+          </div>
+        )}
 
         {summary.length > 0 && (
           <div style={{ marginTop: 22, overflowX: "auto" }}>
